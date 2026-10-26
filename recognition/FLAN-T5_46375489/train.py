@@ -68,6 +68,7 @@ def train_epoch(
             counts = [int((batch["labels"] != -100).sum()) for batch in window]
             if min(counts) == 0:
                 raise ValueError("Training batch has no active target tokens")
+            tokens = sum(counts)
             optimizer.zero_grad(set_to_none=True)
             loss_sum = 0.0
             for batch, count in zip(window, counts, strict=True):
@@ -78,7 +79,7 @@ def train_epoch(
                     loss = model(**inputs).loss
                 if not torch.isfinite(loss):
                     raise FloatingPointError("Nonfinite training loss")
-                (loss * count / sum(counts)).backward()
+                (loss * count / tokens).backward()
                 loss_sum += float(loss.detach()) * count
             torch.nn.utils.clip_grad_norm_(
                 parameters, 1.0, error_if_nonfinite=True
@@ -89,8 +90,8 @@ def train_epoch(
             optimizer.zero_grad(set_to_none=True)
             history.append(
                 {
-                    "loss": loss_sum / sum(counts),
-                    "target_tokens": sum(counts),
+                    "loss": loss_sum / tokens,
+                    "target_tokens": tokens,
                     "examples": sum(len(b["input_ids"]) for b in window),
                     "microbatches": len(window),
                     "learning_rate": learning_rate,
@@ -220,8 +221,8 @@ def save_predictions(path, rows):
             stream.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def plot_history(history, epochs, output):
-    """Plot measured update loss, epoch validation loss and validation ROUGE."""
+def plot_history(history, epochs, metrics, output):
+    """Plot update/epoch losses and final selected-checkpoint ROUGE."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -236,14 +237,14 @@ def plot_history(history, epochs, output):
     )
     steps = [r["step"] for r in epochs]
     axes[0].plot(steps, [r["loss"] for r in epochs], "o-", label="Validation")
-    for key in ROUGE_KEYS:
-        axes[1].plot(steps, [r["rouge"][key] for r in epochs], "o-", label=key)
-    for ax in axes:
-        ax.set_xlabel("Optimiser update")
-        ax.legend()
-        ax.grid(alpha=0.2)
+    axes[1].bar(ROUGE_KEYS, [metrics["rouge"][key] for key in ROUGE_KEYS])
+    axes[1].set_title("Best checkpoint: selected validation rows")
+    axes[0].set_xlabel("Optimiser update")
+    axes[0].legend()
+    axes[0].grid(alpha=0.2)
     axes[0].set_ylabel("Loss per target token")
     axes[1].set_ylabel("ROUGE F1 (%)")
+    axes[1].set_ylim(0, 100)
     fig.tight_layout()
     fig.savefig(output / "training_metrics.png", dpi=150)
     plt.close(fig)
@@ -376,13 +377,6 @@ def main(argv=None):
     validation = sample_records(
         splits["validation"], args.validation_limit, args.seed
     )
-    # Cheap run-scoped checks never masquerade as a full-dataset audit.
-    if not args.audit:
-        audit = audit_overlap(train_rows, validation)
-        write_json(
-            output / "overlap.json",
-            {"scope": "selected rows only; not a global unseen audit", **audit},
-        )
     model = build_model(args.model, args.mode, args.revision).to(device)
     tokenizer = AutoTokenizer.from_pretrained(
         args.model, revision=args.revision, token=False
@@ -394,7 +388,7 @@ def main(argv=None):
     model.generation_config.length_penalty = 1.0
     model.generation_config.early_stopping = args.num_beams > 1
     counts = parameter_counts(model)
-    val_features, val_truncation = tokenize_split(
+    val_features = tokenize_split(
         validation, tokenizer, args.max_input_tokens, args.max_target_tokens
     )
     history, epochs = [], []
@@ -402,20 +396,8 @@ def main(argv=None):
     peak = None
     best_loss = math.inf
     best_epoch = None
-    if args.mode == "baseline":
-        metrics, rows = evaluate(
-            model,
-            tokenizer,
-            validation,
-            val_features,
-            device,
-            args.eval_batch_size,
-            args.bf16,
-            unseen_ids,
-        )
-        save_predictions(output / "validation.jsonl", rows)
-    else:
-        features, train_truncation = tokenize_split(
+    if args.mode != "baseline":
+        features = tokenize_split(
             train_rows, tokenizer, args.max_input_tokens, args.max_target_tokens
         )
         loader = make_dataloader(
@@ -430,6 +412,9 @@ def main(argv=None):
         )
         scheduler = get_linear_schedule_with_warmup(
             optimizer, int(0.1 * budget), budget
+        )
+        val_loader = make_dataloader(
+            val_features, tokenizer, args.eval_batch_size
         )
         for epoch in range(1, args.epochs + 1):
             if device.type == "cuda":
@@ -454,27 +439,34 @@ def main(argv=None):
                 )
             history.extend(updates)
             write_json(output / "training_history.json", history)
-            current, rows = evaluate(
-                model,
-                tokenizer,
-                validation,
-                val_features,
-                device,
-                args.eval_batch_size,
-                args.bf16,
-                unseen_ids,
-            )
-            epochs.append({"epoch": epoch, "step": len(history), **current})
+            loss = validation_loss(model, val_loader, device, args.bf16)
+            epochs.append({"epoch": epoch, "step": len(history), "loss": loss})
             write_json(output / "validation_history.json", epochs)
-            if current["loss"] < best_loss:
-                best_loss, best_epoch, metrics = current["loss"], epoch, current
+            if loss < best_loss:
+                best_loss, best_epoch = loss, epoch
                 save_checkpoint(model, tokenizer, output / "best")
-                save_predictions(output / "validation.jsonl", rows)
-            plot_history(history, epochs, output)
             if len(history) >= budget:
                 break
         save_checkpoint(model, tokenizer, output / "last")
-        del optimizer, scheduler
+        del optimizer, scheduler, model
+        gc.collect()
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        model, tokenizer = load_checkpoint(output / "best", device)
+    # All modes generate once, after selection and without resident optimiser state.
+    metrics, rows = evaluate(
+        model,
+        tokenizer,
+        validation,
+        val_features,
+        device,
+        args.eval_batch_size,
+        args.bf16,
+        unseen_ids,
+    )
+    save_predictions(output / "validation.jsonl", rows)
+    if history:
+        plot_history(history, epochs, metrics, output)
     summary = {
         "mode": args.mode,
         **counts,
@@ -484,23 +476,16 @@ def main(argv=None):
         "examples_seen": sum(r["examples"] for r in history),
         "best_epoch": best_epoch,
         "validation": metrics,
+        "validation_scope": "full official split"
+        if len(validation) == len(splits["validation"])
+        else "seeded subset of official validation",
         "validation_row_indices": list(validation["row_index"]),
         "train_row_indices": list(train_rows["row_index"])
         if args.mode != "baseline"
         else [],
-        "validation_truncation": val_truncation,
-        "training_truncation": train_truncation
-        if args.mode != "baseline"
-        else None,
         "test": None,
     }
     if args.evaluate_test:
-        if args.mode != "baseline":
-            del model
-            gc.collect()
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
-            model, tokenizer = load_checkpoint(output / "best", device)
         test = sample_records(
             load_splits(args.data_dir, splits=("test",))["test"],
             args.validation_limit,
@@ -509,7 +494,7 @@ def main(argv=None):
         references = TARGET_COLUMN in test.column_names and all(
             isinstance(t, str) and t.strip() for t in test[TARGET_COLUMN]
         )
-        features, truncation = tokenize_split(
+        features = tokenize_split(
             test,
             tokenizer,
             args.max_input_tokens,
@@ -525,7 +510,7 @@ def main(argv=None):
             args.eval_batch_size,
             args.bf16,
         )
-        summary["test"]["truncation"] = truncation
+        summary["test"]["row_indices"] = list(test["row_index"])
         save_predictions(output / "test.jsonl", rows)
     write_json(output / "metrics.json", summary)
     print(f"Saved metrics, predictions and any checkpoints to {output}")

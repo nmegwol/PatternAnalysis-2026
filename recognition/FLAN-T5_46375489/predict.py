@@ -65,7 +65,7 @@ def main(argv=None):
         if tokenizer.model_max_length < 1000000
         else 512
     )
-    features, truncation = tokenize_split(
+    features = tokenize_split(
         records, tokenizer, max_input_tokens=limit, include_labels=False
     )
     predictions, lengths, profile = generate_summaries(
@@ -100,7 +100,7 @@ def main(argv=None):
             for row in rows:
                 stream.write(json.dumps(row, ensure_ascii=False) + "\n")
     print(
-        json.dumps({"truncation": truncation, "inference": profile}, indent=2)
+        json.dumps({"max_input_tokens": limit, "inference": profile}, indent=2)
     )
 
 

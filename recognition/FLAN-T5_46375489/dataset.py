@@ -176,7 +176,7 @@ def tokenize_split(
     max_target_tokens=256,
     include_labels=True,
 ):
-    """Tokenise once, truncate with EOS retained, and return features + counts.
+    """Use native T5 truncation, retaining EOS and original references.
 
     Original records/references remain unchanged. Output features contain only
     ragged input_ids, attention_mask and optional labels, ready for the collator.
@@ -190,40 +190,23 @@ def tokenize_split(
     features = {"input_ids": [], "attention_mask": []}
     if include_labels:
         features["labels"] = []
-    truncated = {"inputs": 0, "targets": 0 if include_labels else None}
     for start in range(0, len(records), 256):
         chunk = records[start : start + 256]
         texts = [
             DEFAULT_PROMPT.format(report=t.strip())
             for t in chunk[SOURCE_COLUMN]
         ]
-        inputs = tokenizer(texts, truncation=False, verbose=False)["input_ids"]
-        targets = (
-            tokenizer(
+        inputs = tokenizer(texts, truncation=True, max_length=max_input_tokens)
+        features["input_ids"].extend(inputs["input_ids"])
+        features["attention_mask"].extend(inputs["attention_mask"])
+        if include_labels:
+            targets = tokenizer(
                 text_target=[t.strip() for t in chunk[TARGET_COLUMN]],
-                truncation=False,
-                verbose=False,
-            )["input_ids"]
-            if include_labels
-            else []
-        )
-        for ids in inputs:
-            truncated["inputs"] += len(ids) > max_input_tokens
-            ids = (
-                ids[: max_input_tokens - 1] + [tokenizer.eos_token_id]
-                if len(ids) > max_input_tokens
-                else ids
+                truncation=True,
+                max_length=max_target_tokens,
             )
-            features["input_ids"].append(ids)
-            features["attention_mask"].append([1] * len(ids))
-        for ids in targets:
-            truncated["targets"] += len(ids) > max_target_tokens
-            features["labels"].append(
-                ids[: max_target_tokens - 1] + [tokenizer.eos_token_id]
-                if len(ids) > max_target_tokens
-                else ids
-            )
-    return Dataset.from_dict(features), truncated
+            features["labels"].extend(targets["input_ids"])
+    return Dataset.from_dict(features)
 
 
 def make_dataloader(features, tokenizer, batch_size=2, shuffle=False, seed=42):
