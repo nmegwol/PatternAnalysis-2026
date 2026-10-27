@@ -31,7 +31,7 @@ def load_splits():
 
 
 def checked_text(text):
-    """Reject missing/blank text; strip only exterior whitespace."""
+    """Check that text is nonblank and strip exterior whitespace."""
     if not isinstance(text, str) or not text.strip():
         raise ValueError(
             "Reports and required references must be nonblank text"
@@ -40,15 +40,19 @@ def checked_text(text):
 
 
 def check_overlap(train, validation):
-    """Count normalised report overlap without filtering either split.
-
-    Target agreement means matching any training target for that report.
-    Unseen row IDs use source text only; this does not establish patient or
-    semantic independence.
+    """
+    Count how much report text is shared between the. training and valdiation datasets, and whether those shared reports have matching reference summaries.
     """
 
     def normalise(text):
+        # Normalise by stripping, collapsing whitespace, and lowercasing.
+        # Only normalise text for overlap checking; do not modify original records.
+        # If two texts normalise to the same string, they are considered overlapping for the purpose of this check.
         return " ".join(checked_text(text).split()).casefold()
+
+    # Store every distinct target for each normalised source text in the training set.
+    # One report may have multiple distinct reference summaries,
+    # so we use a set to collect all distinct targets for each source.
 
     train_refs = defaultdict(set)
     for row in train.select_columns([SOURCE_COLUMN, TARGET_COLUMN]):
@@ -56,18 +60,24 @@ def check_overlap(train, validation):
             normalise(row[TARGET_COLUMN])
         )
     validation_refs = defaultdict(set)
+    # shared is the unique set of source texts that appear in both the training and validation sets.
     shared = set()
+    # matching counts how many validation rows have sources present in the training set.
+    # agreeing counts how many of those matching rows have targets that match any of the training targets for that source.
     matching = agreeing = 0
     unseen = []
+
     for i, row in enumerate(validation):
         source = normalise(row[SOURCE_COLUMN])
         target = normalise(row[TARGET_COLUMN])
         validation_refs[source].add(target)
+        # Check if this source text has been seen in the training set.
         if source in train_refs:
             shared.add(source)
             matching += 1
             agreeing += target in train_refs[source]
         else:
+            # This source text is not present in the training set.
             unseen.append(row.get("row_index", i))
     return {
         "train_rows": len(train),
@@ -96,7 +106,7 @@ def tokenize_split(
     max_target_tokens=256,
     include_labels=True,
 ):
-    """Map raw records to ragged model inputs, leaving originals untouched."""
+    """Tokenize and split records into model inputs and labels."""
     required = (
         {SOURCE_COLUMN, TARGET_COLUMN} if include_labels else {SOURCE_COLUMN}
     )
