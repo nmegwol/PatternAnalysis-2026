@@ -107,11 +107,11 @@ def tokenize_split(
     include_labels=True,
 ):
     """Tokenize and split records into model inputs and labels."""
-    required = (
-        {SOURCE_COLUMN, TARGET_COLUMN} if include_labels else {SOURCE_COLUMN}
-    )
-    if not len(records) or not required <= set(records.column_names):
-        raise ValueError("Empty records or missing required text columns")
+    # required = (
+    #     {SOURCE_COLUMN, TARGET_COLUMN} if include_labels else {SOURCE_COLUMN}
+    # )
+    # if not len(records) or not required <= set(records.column_names):
+    #     raise ValueError("Empty records or missing required text columns")
     if (
         min(max_input_tokens, max_target_tokens) < 2
         or tokenizer.eos_token_id is None
@@ -120,6 +120,8 @@ def tokenize_split(
 
     def preprocess(batch):
         inputs = tokenizer(
+            # Use the same instruction prompt for supervised learning and inference.
+            # Truncation helps limit the memory usage and ensures sequences fit within the model's maximum input length, but it may discard important context if the text is too long.
             [
                 DEFAULT_PROMPT.format(report=checked_text(t))
                 for t in batch[SOURCE_COLUMN]
