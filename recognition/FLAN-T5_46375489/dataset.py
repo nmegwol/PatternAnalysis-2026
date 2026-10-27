@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import random
 from collections import defaultdict
 from pathlib import Path
 
@@ -28,6 +29,21 @@ def load_splits():
         # Add a row index column for tracking original positions in saved predictions.
         splits[name] = records.add_column("row_index", range(len(records)))
     return splits
+
+
+def sample_records(records, limit=0, seed=42):
+    """Select up to limit rows without replacement; 0 keeps all rows.
+
+    Sample positions with a local RNG, then retain their original order and
+    metadata. Duplicate report texts remain separate eligible rows. The input
+    Dataset and the global random state are unchanged.
+    """
+    if limit < 0:
+        raise ValueError("limit must be nonnegative (0 = all rows)")
+    if limit == 0 or limit >= len(records):
+        return records
+    indices = sorted(random.Random(seed).sample(range(len(records)), limit))
+    return records.select(indices)
 
 
 def checked_text(text):
