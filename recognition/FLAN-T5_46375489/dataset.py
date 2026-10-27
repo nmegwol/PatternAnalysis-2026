@@ -24,14 +24,8 @@ def load_splits():
     """Load official Hub splits unchanged, with row IDs for saved predictions."""
     splits = load_dataset(DATASET_ID)
     for name in ("train", "validation", "test"):
-        if name not in splits or not len(splits[name]):
-            raise ValueError(f"Missing or empty official {name} split")
         records = splits[name]
-        required = {SOURCE_COLUMN}
-        if name != "test":
-            required.add(TARGET_COLUMN)
-        if not required <= set(records.column_names):
-            raise ValueError(f"Missing required columns in {name}: {required}")
+        # Add a row index column for tracking original positions in saved predictions.
         splits[name] = records.add_column("row_index", range(len(records)))
     return splits
 
