@@ -1,4 +1,4 @@
-"""Dataset loading, preprocessing and batching for radiology report simplification."""
+"""Load and batch LaymanRRG radiology reports for summarisation."""
 
 from datasets import DatasetDict
 from torch.utils.data import DataLoader
@@ -6,21 +6,49 @@ from transformers import DataCollatorForSeq2Seq, DataCollatorWithPadding
 
 
 class RadiologyData:
-    """Manage the official LaymanRRG splits without reshuffling or deduplicating."""
+    """Prepares official LaymanRRG splits and creates padded batches.
+
+    Call load() before requesting a dataloader.
+
+    Attributes:
+        tokenizer: Hugging Face tokenizer shared by all splits.
+        config: Dict of dataset, tokenisation and batching settings.
+    """
 
     DATASET_ID = "BioLaySumm/BioLaySumm2025-LaymanRRG-opensource-track"
     SOURCE_COLUMN = "radiology_report"
     TARGET_COLUMN = "layman_report"
 
     def __init__(self, tokenizer, config):
+        """Stores the tokenizer and configuration without loading data.
+
+        Args:
+            tokenizer: A Hugging Face PreTrainedTokenizerBase instance.
+            config: Dict containing dataset_id, smoke, batch_size,
+                max_input_length, max_target_length and prompt_template
+                (with a {report} placeholder). Optional keys are revision,
+                eval_batch_size, max_train_examples and max_validation_examples.
+        """
         self.tokenizer = tokenizer
         self.config = config
 
     def load(self):
-        """Load and tokenise official splits; smoke mode selects train/validation prefixes."""
+        """Loads dataset rows and stores their tokenised forms.
+
+        Smoke mode selects the first 16 training and 8 validation rows.
+        Optional example limits also select prefixes of those splits. Both
+        subset modes omit test data; full loading excludes test references from
+        tokenisation. Split membership and row order are preserved.
+
+        Stores selected rows in _raw_splits and tokens in _tokenised_splits.
+        """
         from datasets import load_dataset
 
-        self._raw_splits = load_dataset(self.config["dataset_id"], revision=self.config.get("revision"))
+        self._raw_splits = load_dataset(
+            self.config["dataset_id"],
+            revision=self.config.get("revision")
+        )
+
         if self.config["smoke"]:
             # Select before tokenisation; never process test rows here.
             self._raw_splits = DatasetDict({
@@ -50,7 +78,17 @@ class RadiologyData:
             )
 
     def _tokenise_batch(self, examples):
-        """Tokenise inputs and targets, including truncation and label masking."""
+        """Tokenises and truncates prompted reports and optional targets.
+
+        Args:
+            examples: Dict mapping column names to lists of strings. Requires
+                radiology_report; layman_report is optional.
+
+        Returns:
+            A dict of unpadded input IDs and attention masks, plus labels when
+            targets are present. Padding and -100 label masking happen later
+            in the dataloader's collator.
+        """
         encoded = self.tokenizer(
             [self.config["prompt_template"].format(report=report) for report in examples[self.SOURCE_COLUMN]],
             max_length=self.config["max_input_length"],
@@ -70,12 +108,32 @@ class RadiologyData:
         return dict(encoded)
 
     def dataloader(self, split, shuffle=None):
-        """Pad batches and shuffle only training rows by default."""
+        """Creates a padded DataLoader for a previously loaded split.
+
+        Uses batch_size for training. Other splits use eval_batch_size when
+        provided, falling back to batch_size.
+        Label padding uses -100; test batches contain no labels.
+
+        Args:
+            split: Split name (str): "train", "validation" or "test".
+            shuffle: Whether to shuffle rows (bool). None shuffles only train.
+
+        Returns:
+            A torch.utils.data.DataLoader yielding batches of PyTorch tensors.
+
+        Raises:
+            KeyError: If the requested split was not loaded.
+        """
         if split == "test":
-            collator = DataCollatorWithPadding(self.tokenizer, return_tensors="pt")
+            collator = DataCollatorWithPadding(
+                self.tokenizer,
+                return_tensors="pt"
+            )
         else:
             collator = DataCollatorForSeq2Seq(
-                tokenizer=self.tokenizer, padding=True, label_pad_token_id=-100,
+                tokenizer=self.tokenizer,
+                padding=True,
+                label_pad_token_id=-100,
                 return_tensors="pt",
             )
 
