@@ -16,7 +16,8 @@ import yaml
 from rouge_score import rouge_scorer
 from transformers import AutoTokenizer
 
-matplotlib.use("Agg")  # Save plots on laptops, Colab and headless HPC systems.
+# Select a non-interactive backend before pyplot for headless training runs.
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from torch.optim import AdamW
 from torch.nn.utils import clip_grad_norm_
@@ -24,87 +25,198 @@ from torch.nn.utils import clip_grad_norm_
 from dataset import RadiologyData
 from modules import DEFAULT_MODEL_NAME, load_model
 from predict import GENERATION_METRICS_SCOPE, generate_with_metrics
-from utils import DEFAULT_PROMPT_TEMPLATE, configure_logger, select_device, set_seed, write_json
+from utils import (
+    DEFAULT_PROMPT_TEMPLATE,
+    configure_logger,
+    select_device,
+    set_seed,
+    write_json,
+)
 
 
 class RadiologyTrainer:
-    """Train a model using the recorded experiment settings."""
+    """Trains and validates FLAN-T5 while recording metrics and checkpoints.
+
+    Attributes:
+        history: List of metric/resource dicts, one per completed epoch.
+        step_history: List of training metric dicts, one per optimizer update.
+        output_dir: pathlib.Path where logs, plots and checkpoints are saved.
+    """
 
     METRIC_NAMES = ("rouge1", "rouge2", "rougeL", "rougeLsum")
     STEP_FIELDS = (
-        "epoch", "epoch_fraction", "global_step", "train_loss", "learning_rate",
-        "grad_norm", "examples", "target_tokens", "cumulative_examples",
-        "cumulative_target_tokens", "step_seconds", "train_elapsed_seconds",
-        "examples_per_second", "target_tokens_per_second", "allocated_gpu_gib",
+        "epoch",
+        "epoch_fraction",
+        "global_step",
+        "train_loss",
+        "learning_rate",
+        "grad_norm",
+        "examples",
+        "target_tokens",
+        "cumulative_examples",
+        "cumulative_target_tokens",
+        "step_seconds",
+        "train_elapsed_seconds",
+        "examples_per_second",
+        "target_tokens_per_second",
+        "allocated_gpu_gib",
         "reserved_gpu_gib",
     )
 
     def __init__(self, model, data, config):
+        """Stores run settings and initialises empty training histories.
+
+        Args:
+            model: Hugging Face seq2seq model, optionally with PEFT adapters.
+            data: RadiologyData instance; fit() loads its dataset splits.
+            config: Nested settings dict returned by parse_config(), containing
+                model, data and training sections.
+        """
         self.model = model
         self.data = data
         self.config = config
         self.settings = config["training"]
         self.device = torch.device(self.settings["device"])
         self.output_dir = Path(self.settings["output_dir"])
+
         self.history = []
         self.step_history = []
+
         self._optimizer = None
         self._best_validation_loss = float("inf")
         self._global_step = 0
         self.logger = logging.getLogger("radiology")
 
     def fit(self):
-        """Train, validate and save metrics, resources, plots and checkpoints."""
+        """Runs the configured training epochs and saves their artifacts.
+
+        Loads data, creates a fresh AdamW optimizer and resets step_history.csv.
+        Each epoch writes metrics, resource measurements, plots and checkpoints.
+        Use a new trainer instance for a fresh run.
+
+        Returns:
+            The list of per-epoch metric dicts also stored in history.
+        """
         fit_started = perf_counter()
         self.output_dir.mkdir(parents=True, exist_ok=True)
         (self.output_dir / "step_history.csv").write_text("", encoding="utf-8")
+
         self.data.load()
         self.model.to(self.device)
+        # Frozen base weights are excluded when the model uses LoRA.
         self._optimizer = AdamW(
             (p for p in self.model.parameters() if p.requires_grad),
-            lr=self.settings["learning_rate"], weight_decay=self.settings["weight_decay"],
+            lr=self.settings["learning_rate"],
+            weight_decay=self.settings["weight_decay"],
         )
+
         resources = {
+            # Runtime details and parameter/data counts identify the workload.
             "device": str(self.device),
-            "gpu": torch.cuda.get_device_name(self.device) if self.device.type == "cuda" else None,
+            "gpu": (
+                torch.cuda.get_device_name(self.device)
+                if self.device.type == "cuda" else None
+            ),
             "python_version": platform.python_version(),
-            "torch_version": str(torch.__version__), "cuda_version": torch.version.cuda,
-            "packages": {name: version(name) for name in ("transformers", "peft", "datasets")},
+            "torch_version": str(torch.__version__),
+            "cuda_version": torch.version.cuda,
+            "packages": {
+                name: version(name)
+                for name in ("transformers", "peft", "datasets")
+            },
             "total_parameters": sum(p.numel() for p in self.model.parameters()),
-            "trainable_parameters": sum(p.numel() for p in self.model.parameters() if p.requires_grad),
+            "trainable_parameters": sum(
+                p.numel() for p in self.model.parameters() if p.requires_grad
+            ),
             "train_examples": len(self.data._raw_splits["train"]),
             "validation_examples": len(self.data._raw_splits["validation"]),
-            "timing_scope": "fit_seconds includes data preparation, training, validation, plots and checkpoints; excludes model/tokenizer loading before fit().",
+
+            # Save metric definitions alongside values for later interpretation.
+            "timing_scope": (
+                "fit_seconds includes data preparation, training, validation, "
+                "plots and checkpoints; excludes model/tokenizer loading "
+                "before fit()."
+            ),
             "validation_scope": "Loss, generation, decoding and ROUGE scoring.",
             "validation_generation_scope": GENERATION_METRICS_SCOPE,
-            "validation_throughput_scope": "generated_tokens_per_second uses generation time only; end_to_end_generated_tokens_per_second uses the complete validation stage, including loss, decoding and ROUGE. Aggregate rates use total tokens / total time.",
-            "gpu_memory_scope": "PyTorch CUDA allocator peaks, including persistent model/optimizer memory and cached blocks; GiB (1024**3 bytes); null on CPU/MPS.",
+            "validation_throughput_scope": (
+                "generated_tokens_per_second uses generation time only; "
+                "end_to_end_generated_tokens_per_second uses the complete "
+                "validation stage, including loss, decoding and ROUGE. "
+                "Aggregate rates use total tokens / total time."
+            ),
+            "gpu_memory_scope": (
+                "PyTorch CUDA allocator peaks, including persistent "
+                "model/optimizer memory and cached blocks; "
+                "GiB (1024**3 bytes); null on CPU/MPS."
+            ),
             "step_history_file": "step_history.csv",
-            "step_loss_scope": "Token-weighted mean over the batches contributing to one optimizer update, measured before that update. grad_norm is measured after token normalization and before clipping.",
-            "step_timing_scope": "Synchronized accumulation-window time includes batch loading, device transfers, forward/backward, clipping and optimizer update; excludes CSV writes, validation and checkpoints. train_elapsed_seconds sums these windows. Synchronization and per-update writes can add overhead to training.",
-            "step_count_scope": "Examples and non-padding target tokens processed per update; cumulative counts include repeated passes across epochs. epoch_fraction uses completed batches / batches per epoch.",
-            "step_gpu_memory_scope": "Allocated/reserved snapshots after each update, not peaks; GiB; blank in CSV on CPU/MPS. Epoch history retains stage peaks.",
+            "step_loss_scope": (
+                "Token-weighted mean over the batches contributing to one "
+                "optimizer update, measured before that update. grad_norm is "
+                "measured after token normalization and before clipping."
+            ),
+            "step_timing_scope": (
+                "Synchronized accumulation-window time includes batch loading, "
+                "device transfers, forward/backward, clipping and optimizer "
+                "update; excludes CSV writes, validation and checkpoints. "
+                "train_elapsed_seconds sums these windows. Synchronization "
+                "and per-update writes can add overhead to training."
+            ),
+            "step_count_scope": (
+                "Examples and non-padding target tokens processed per update; "
+                "cumulative counts include repeated passes across epochs. "
+                "epoch_fraction uses completed batches / batches per epoch."
+            ),
+            "step_gpu_memory_scope": (
+                "Allocated/reserved snapshots after each update, not peaks; "
+                "GiB; blank in CSV on CPU/MPS. "
+                "Epoch history retains stage peaks."
+            ),
         }
 
         for epoch in range(1, self.settings["epochs"] + 1):
-            self.logger.info("Epoch %s/%s: training", epoch, self.settings["epochs"])
+            self.logger.info(
+                "Epoch %s/%s: training", epoch, self.settings["epochs"]
+            )
             step_before = self._global_step
             train_loss, train_resources = self._measure_stage(
                 self._train_one_epoch, self.data.dataloader("train")
             )
+
             self.logger.info("Epoch %s: validation", epoch)
             validation, val_resources = self._measure_stage(self.evaluate)
 
-            self.history.append({
-                "epoch": float(epoch), "train_loss": train_loss,
-                **{f"val_{name}": value for name, value in validation.items()},
-                **{f"train_{name}": value for name, value in train_resources.items()},
-                **{f"val_{name}": value for name, value in val_resources.items()},
-                "train_examples_per_second": resources["train_examples"] / train_resources["seconds"],
-                "val_examples_per_second": resources["validation_examples"] / val_resources["seconds"],
-                "val_end_to_end_generated_tokens_per_second": validation["generated_tokens"] / val_resources["seconds"],
-                "optimizer_steps": self._global_step - step_before,
-            })
+            self.history.append(
+                {
+                    "epoch": float(epoch),
+                    "train_loss": train_loss,
+                    **{
+                        f"val_{name}": value
+                        for name, value in validation.items()
+                    },
+                    **{
+                        f"train_{name}": value
+                        for name, value in train_resources.items()
+                    },
+                    **{
+                        f"val_{name}": value
+                        for name, value in val_resources.items()
+                    },
+                    "train_examples_per_second": (
+                        resources["train_examples"] / train_resources["seconds"]
+                    ),
+                    "val_examples_per_second": (
+                        resources["validation_examples"]
+                        / val_resources["seconds"]
+                    ),
+                    "val_end_to_end_generated_tokens_per_second": (
+                        validation["generated_tokens"]
+                        / val_resources["seconds"]
+                    ),
+                    "optimizer_steps": self._global_step - step_before,
+                }
+            )
 
             self.plot_history()
             write_json(self.history, self.output_dir / "history.json")
@@ -113,267 +225,513 @@ class RadiologyTrainer:
             is_best = validation["loss"] < self._best_validation_loss
             if is_best:
                 self._best_validation_loss = validation["loss"]
+
             if self.settings.get("save_every_epoch", False):
                 checkpoint = self.save_checkpoint(f"epoch-{epoch:02d}")
                 if is_best:
-                    write_json({"checkpoint": checkpoint.name, "val_loss": validation["loss"]},
-                               self.output_dir / "best_checkpoint.json")
+                    # Point to the best epoch without saving its weights twice.
+                    write_json(
+                        {
+                            "checkpoint": checkpoint.name,
+                            "val_loss": validation["loss"],
+                        },
+                        self.output_dir / "best_checkpoint.json",
+                    )
             else:
                 if is_best:
                     self.save_checkpoint("best")
                 self.save_checkpoint("latest")
+
             resources.update(
-                completed_epochs=len(self.history), optimizer_steps=self._global_step,
-                total_training_seconds=sum(row["train_seconds"] for row in self.history),
-                total_validation_seconds=sum(row["val_seconds"] for row in self.history),
-                total_validation_generated_tokens=sum(row["val_generated_tokens"] for row in self.history),
-                total_validation_generation_seconds=sum(row["val_generation_seconds"] for row in self.history),
+                completed_epochs=len(self.history),
+                optimizer_steps=self._global_step,
+                total_training_seconds=sum(
+                    row["train_seconds"] for row in self.history
+                ),
+                total_validation_seconds=sum(
+                    row["val_seconds"] for row in self.history
+                ),
+                total_validation_generated_tokens=sum(
+                    row["val_generated_tokens"] for row in self.history
+                ),
+                total_validation_generation_seconds=sum(
+                    row["val_generation_seconds"] for row in self.history
+                ),
                 fit_seconds=perf_counter() - fit_started,
             )
+
+            # Ratios of totals weight each epoch by its actual elapsed time.
             resources["validation_generated_tokens_per_second"] = (
-                resources["total_validation_generated_tokens"] / resources["total_validation_generation_seconds"]
+                resources["total_validation_generated_tokens"]
+                / resources["total_validation_generation_seconds"]
             )
             resources["validation_end_to_end_generated_tokens_per_second"] = (
-                resources["total_validation_generated_tokens"] / resources["total_validation_seconds"]
+                resources["total_validation_generated_tokens"]
+                / resources["total_validation_seconds"]
             )
             write_json(resources, self.output_dir / "resources.json")
 
         return self.history
 
     def _autocast(self):
-        return (torch.autocast(self.device.type, dtype=torch.bfloat16)
-                if self.settings.get("bf16", False) else nullcontext())
+        """Selects the configured precision context.
+
+        Returns:
+            A torch.autocast context using BF16 when enabled, or nullcontext.
+        """
+        return (
+            torch.autocast(self.device.type, dtype=torch.bfloat16)
+            if self.settings.get("bf16", False) else nullcontext()
+        )
 
     def _measure_stage(self, operation, *args):
-        """Measure a complete stage without clearing the GPU allocator cache."""
+        """Times an operation and records CUDA allocator peaks.
+
+        Synchronises the device around the call and resets CUDA peak counters
+        without clearing cached memory.
+
+        Args:
+            operation: Callable to execute and measure.
+            *args: Positional arguments forwarded to operation.
+
+        Returns:
+            A (result, resources) tuple. resources is a dict of elapsed seconds
+            and peak allocated/reserved CUDA memory in GiB. Memory fields are
+            None on CPU or MPS.
+        """
         cuda = self.device.type == "cuda"
+
+        # Accelerator work is asynchronous; bracket timing with device waits.
         self._synchronize()
         if cuda:
+            # Reset peak counters while retaining current allocations and cache.
             torch.cuda.reset_peak_memory_stats(self.device)
+
         started = perf_counter()
         result = operation(*args)
         self._synchronize()
         seconds = perf_counter() - started
+
         return result, {
             "seconds": seconds,
-            "peak_allocated_gpu_gib": torch.cuda.max_memory_allocated(self.device) / 1024**3 if cuda else None,
-            "peak_reserved_gpu_gib": torch.cuda.max_memory_reserved(self.device) / 1024**3 if cuda else None,
+            "peak_allocated_gpu_gib": (
+                torch.cuda.max_memory_allocated(self.device) / 1024**3
+                if cuda else None
+            ),
+            "peak_reserved_gpu_gib": (
+                torch.cuda.max_memory_reserved(self.device) / 1024**3
+                if cuda else None
+            ),
         }
 
     def _synchronize(self):
+        """Waits for queued CUDA or MPS work; does nothing on CPU."""
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
         elif self.device.type == "mps":
             torch.mps.synchronize()
 
     def _train_one_epoch(self, loader):
-        """Train one epoch with token-weighted gradient accumulation."""
+        """Trains one epoch with token-weighted gradient accumulation.
+
+        Requires an initialised optimizer. Clips gradients and records each
+        update in step_history and its CSV, including a final partial window.
+
+        Args:
+            loader: PyTorch DataLoader yielding tokenised batches with target
+                labels padded using -100.
+
+        Returns:
+            Mean cross-entropy per non-padding target token (float).
+        """
         self.model.train()
         self._optimizer.zero_grad(set_to_none=True)
+
         total_loss = 0.0
         total_tokens = 0
+
+        # A window groups the batches contributing to one optimizer update.
         window_tokens = 0
         window_examples = 0
         window_loss = 0.0
         accumulation_steps = self.settings["gradient_accumulation_steps"]
-        parameters = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
+        parameters = [
+            parameter for parameter in self.model.parameters()
+            if parameter.requires_grad
+        ]
+
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        with (self.output_dir / "step_history.csv").open("a", newline="", encoding="utf-8") as log:
+        with (self.output_dir / "step_history.csv").open(
+            "a", newline="", encoding="utf-8"
+        ) as log:
             writer = csv.DictWriter(log, fieldnames=self.STEP_FIELDS)
             if log.tell() == 0:
                 writer.writeheader()
+
             self._synchronize()
             window_started = perf_counter()
+
             for step, batch in enumerate(loader, start=1):
                 batch = batch.to(self.device)
+                # The collator marks padded labels with -100; ignore them here.
                 tokens = batch["labels"].ne(-100).sum().item()
                 with self._autocast():
                     loss = self.model(**batch).loss
-                # Backpropagate summed token losses, then normalise the entire update window.
+
+                # Undo the model's mean reduction before accumulating gradients.
+                # Normalising once per window weights unequal target lengths.
                 (loss * tokens).backward()
                 summed_loss = loss.detach().item() * tokens
+
                 total_loss += summed_loss
                 total_tokens += tokens
                 window_loss += summed_loss
                 window_tokens += tokens
                 window_examples += batch["labels"].shape[0]
+
+                # Flush the final window even when it has fewer batches.
                 if step % accumulation_steps == 0 or step == len(loader):
                     for parameter in parameters:
                         parameter.grad.div_(window_tokens)
-                    grad_norm = clip_grad_norm_(parameters, self.settings["max_grad_norm"])
+
+                    # Clip normalised gradients; the return is pre-clip norm.
+                    grad_norm = clip_grad_norm_(
+                        parameters, self.settings["max_grad_norm"]
+                    )
                     learning_rate = self._optimizer.param_groups[0]["lr"]
                     self._optimizer.step()
                     self._optimizer.zero_grad(set_to_none=True)
                     self._global_step += 1
+
                     self._synchronize()
                     seconds = perf_counter() - window_started
-                    previous = self.step_history[-1] if self.step_history else {}
+
+                    previous = (
+                        self.step_history[-1] if self.step_history else {}
+                    )
                     cuda = self.device.type == "cuda"
                     record = {
                         "epoch": len(self.history) + 1,
-                        "epoch_fraction": len(self.history) + step / len(loader),
+                        "epoch_fraction": (
+                            len(self.history) + step / len(loader)
+                        ),
                         "global_step": self._global_step,
                         "train_loss": window_loss / window_tokens,
-                        "learning_rate": learning_rate, "grad_norm": float(grad_norm),
-                        "examples": window_examples, "target_tokens": window_tokens,
-                        "cumulative_examples": previous.get("cumulative_examples", 0) + window_examples,
-                        "cumulative_target_tokens": previous.get("cumulative_target_tokens", 0) + window_tokens,
+                        "learning_rate": learning_rate,
+                        "grad_norm": float(grad_norm),
+                        "examples": window_examples,
+                        "target_tokens": window_tokens,
+                        "cumulative_examples": (
+                            previous.get("cumulative_examples", 0)
+                            + window_examples
+                        ),
+                        "cumulative_target_tokens": (
+                            previous.get("cumulative_target_tokens", 0)
+                            + window_tokens
+                        ),
                         "step_seconds": seconds,
-                        "train_elapsed_seconds": previous.get("train_elapsed_seconds", 0.0) + seconds,
+                        "train_elapsed_seconds": (
+                            previous.get("train_elapsed_seconds", 0.0) + seconds
+                        ),
                         "examples_per_second": window_examples / seconds,
                         "target_tokens_per_second": window_tokens / seconds,
-                        "allocated_gpu_gib": torch.cuda.memory_allocated(self.device) / 1024**3 if cuda else None,
-                        "reserved_gpu_gib": torch.cuda.memory_reserved(self.device) / 1024**3 if cuda else None,
+                        "allocated_gpu_gib": (
+                            torch.cuda.memory_allocated(self.device) / 1024**3
+                            if cuda else None
+                        ),
+                        "reserved_gpu_gib": (
+                            torch.cuda.memory_reserved(self.device) / 1024**3
+                            if cuda else None
+                        ),
                     }
                     self.step_history.append(record)
                     writer.writerow(record)
                     log.flush()
+
+                    # Start the next timer after logging I/O has finished.
                     window_tokens = window_examples = 0
                     window_loss = 0.0
                     window_started = perf_counter()
+
         return total_loss / total_tokens
 
     @torch.inference_mode()
     def evaluate(self):
-        """Score validation only; official test references are withheld."""
+        """Computes validation loss, ROUGE and generation throughput.
+
+        Requires loaded data. Loss uses truncated target labels; ROUGE uses
+        full reference texts and averages per-report F1 scores. Restores the
+        model's previous training mode on successful completion.
+
+        Returns:
+            A dict containing token-weighted loss, rouge1, rouge2, rougeL,
+            rougeLsum, generated token count, generation seconds and throughput.
+        """
         self.model.to(self.device)
         was_training = self.model.training
         self.model.eval()
+
         total_loss = 0.0
         total_tokens = 0
         predictions = []
         generated_tokens = 0
         generation_seconds = 0.0
+
         for batch in self.data.dataloader("validation"):
             batch = batch.to(self.device)
             tokens = batch["labels"].ne(-100).sum().item()
             with self._autocast():
                 total_loss += self.model(**batch).loss.item() * tokens
+
+                # Reference labels are used for loss, never as generation input.
                 generated, generation = generate_with_metrics(
                     self.model,
-                    {"input_ids": batch["input_ids"], "attention_mask": batch["attention_mask"]},
-                    max_new_tokens=self.settings["max_new_tokens"], num_beams=self.settings["num_beams"], do_sample=False,
+                    {
+                        "input_ids": batch["input_ids"],
+                        "attention_mask": batch["attention_mask"],
+                    },
+                    max_new_tokens=self.settings["max_new_tokens"],
+                    num_beams=self.settings["num_beams"],
+                    do_sample=False,
                 )
+
             generated_tokens += generation["generated_tokens"]
             generation_seconds += generation["generation_seconds"]
             total_tokens += tokens
-            predictions.extend(text.strip() for text in self.data.tokenizer.batch_decode(
-                generated, skip_special_tokens=True
-            ))
-        # Score full references, not the truncated labels used for training loss.
-        references = self.data._raw_splits["validation"][self.data.TARGET_COLUMN]
+            predictions.extend(
+                text.strip()
+                for text in self.data.tokenizer.batch_decode(
+                    generated, skip_special_tokens=True
+                )
+            )
+
+        # Score full references, including text beyond the target-token limit.
+        references = self.data._raw_splits["validation"][
+            self.data.TARGET_COLUMN
+        ]
         scorer = rouge_scorer.RougeScorer(self.METRIC_NAMES, use_stemmer=True)
         totals = dict.fromkeys(self.METRIC_NAMES, 0.0)
+
         for prediction, reference in zip(predictions, references, strict=True):
-            # ROUGE-Lsum uses newline-separated sentences, matching the experiment notebooks.
+            # ROUGE-Lsum uses sentence breaks as in the experiment notebooks.
             reference, prediction = [
                 "\n".join(re.split(r"(?<=[.!?])\s+|\n+", text.strip()))
                 for text in (reference, prediction)
             ]
+
             scores = scorer.score(reference, prediction)
             for name in self.METRIC_NAMES:
                 totals[name] += scores[name].fmeasure
+
+        # Return to the caller's mode after this inference-only evaluation.
         self.model.train(was_training)
-        return {"loss": total_loss / total_tokens,
-                "generated_tokens": generated_tokens, "generation_seconds": generation_seconds,
-                "generated_tokens_per_second": generated_tokens / generation_seconds,
-                **{name: value / len(predictions) for name, value in totals.items()}}
+        return {
+            "loss": total_loss / total_tokens,
+            "generated_tokens": generated_tokens,
+            "generation_seconds": generation_seconds,
+            "generated_tokens_per_second": (
+                generated_tokens / generation_seconds
+            ),
+            **{
+                name: value / len(predictions)
+                for name, value in totals.items()
+            },
+        }
 
     def save_checkpoint(self, name="latest"):
-        """Save model/adapters, tokenizer, settings and training state."""
+        """Saves model weights or adapters, tokenizer, settings and run state.
+
+        Requires an initialised optimizer. Run state includes optimizer state,
+        epoch/update counters, history and the CPU PyTorch RNG state. Automatic
+        training resumption is not implemented.
+
+        Args:
+            name: Checkpoint subdirectory name (str), relative to output_dir.
+
+        Returns:
+            The saved checkpoint directory as a pathlib.Path.
+        """
         checkpoint_dir = self.output_dir / name
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        # PEFT saves adapter weights here; a full model saves all model weights.
         self.model.save_pretrained(checkpoint_dir)
         self.data.tokenizer.save_pretrained(checkpoint_dir)
         write_json(self.config, checkpoint_dir / "config_run.json")
-        torch.save({
-            "optimizer": self._optimizer.state_dict(),
-            "epoch": len(self.history),
-            "global_step": self._global_step,
-            "best_validation_loss": self._best_validation_loss,
-            "history": self.history,
-            "torch_rng_state": torch.get_rng_state(),
-        }, checkpoint_dir / "training_state.pt")
+
+        # Keep optimizer/counter state separate from inference model files.
+        torch.save(
+            {
+                "optimizer": self._optimizer.state_dict(),
+                "epoch": len(self.history),
+                "global_step": self._global_step,
+                "best_validation_loss": self._best_validation_loss,
+                "history": self.history,
+                "torch_rng_state": torch.get_rng_state(),
+            },
+            checkpoint_dir / "training_state.pt",
+        )
+
         self.logger.info("Saved checkpoint: %s", checkpoint_dir)
         return checkpoint_dir
 
     def plot_history(self):
-        """Write the loss and validation ROUGE plots after each epoch."""
+        """Saves loss and validation-ROUGE plots as PNG files.
+
+        Uses per-update training loss when available, otherwise epoch averages.
+
+        Returns:
+            A (loss_path, metrics_path) tuple of pathlib.Path objects.
+        """
         plot_dir = self.output_dir / "plots"
         plot_dir.mkdir(parents=True, exist_ok=True)
         epochs = [row["epoch"] for row in self.history]
+
         plots = (
-            ("losses", ("train_loss", "val_loss"), "Learning curves", "Cross-entropy loss"),
-            ("metrics", tuple(f"val_{key}" for key in self.METRIC_NAMES), "Validation metrics", "ROUGE score"),
+            (
+                "losses",
+                ("train_loss", "val_loss"),
+                "Learning curves",
+                "Cross-entropy loss",
+            ),
+            (
+                "metrics",
+                tuple(f"val_{key}" for key in self.METRIC_NAMES),
+                "Validation metrics",
+                "ROUGE score",
+            ),
         )
+
         for filename, columns, title, ylabel in plots:
             fig, ax = plt.subplots(figsize=(7, 4.5))
+
             for column in columns:
                 if column == "train_loss" and self.step_history:
-                    ax.plot([row["epoch_fraction"] for row in self.step_history],
-                            [row["train_loss"] for row in self.step_history],
-                            marker=".", label="Training (per update)")
+                    # Fractional epochs show every update on the same x-axis.
+                    ax.plot(
+                        [row["epoch_fraction"] for row in self.step_history],
+                        [row["train_loss"] for row in self.step_history],
+                        marker=".",
+                        label="Training (per update)",
+                    )
                 else:
-                    ax.plot(epochs, [row[column] for row in self.history], marker="o",
-                            linestyle="--" if column == "val_loss" else "-",
-                            label="Validation" if column == "val_loss" else column)
+                    ax.plot(
+                        epochs,
+                        [row[column] for row in self.history],
+                        marker="o",
+                        linestyle="--" if column == "val_loss" else "-",
+                        label="Validation" if column == "val_loss" else column,
+                    )
+
             ax.set(xlabel="Epoch", ylabel=ylabel, title=title, xticks=epochs)
             if filename == "losses":
                 ax.set_xlim(left=0)
                 ax.set_xticks([0, *epochs])
             if filename == "metrics":
                 ax.set_ylim(0, 1)
+
             ax.grid(alpha=0.3)
             ax.legend()
             fig.tight_layout()
             fig.savefig(plot_dir / f"{filename}.png", dpi=160)
             plt.close(fig)
+
         return plot_dir / "losses.png", plot_dir / "metrics.png"
 
 
 def parse_config(argv=None):
-    """Read YAML defaults, apply CLI overrides, and set smoke limits."""
-    parser = argparse.ArgumentParser(description="Fine-tune FLAN-T5 on official LaymanRRG splits.")
-    parser.add_argument(
-        "--config", type=Path,
-        help="YAML defaults; CLI options override them. YAML output_dir is relative to its file.",
+    """Combines command-line arguments and optional YAML into run settings.
+
+    Command-line options override YAML defaults. A YAML output_dir is relative
+    to its configuration file. Smoke mode then applies small-run limits and
+    appends /smoke to the output directory.
+
+    Args:
+        argv: Sequence of argument strings without the program name, or None
+            to read the command line.
+
+    Returns:
+        A (config, seed) tuple: a dict with model, data and training sections,
+        and the integer random seed.
+
+    Raises:
+        SystemExit: If arguments are invalid or help is requested.
+    """
+    parser = argparse.ArgumentParser(
+        description="Fine-tune FLAN-T5 on official LaymanRRG splits."
     )
     parser.add_argument(
-        "--smoke", action=argparse.BooleanOptionalAction, default=False,
-        help="Use 16 train/8 validation rows, one epoch and short sequences; append /smoke to output_dir.",
+        "--config",
+        type=Path,
+        help=(
+            "YAML defaults; CLI options override them. "
+            "YAML output_dir is relative to its file."
+        ),
     )
+    parser.add_argument(
+        "--smoke",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Use 16 train/8 validation rows, one epoch and short sequences; "
+            "append /smoke to output_dir."
+        ),
+    )
+
     parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
-    parser.add_argument("--fine-tuning-mode", choices=("full", "lora"), default="lora")
-    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
+    parser.add_argument(
+        "--fine-tuning-mode", choices=("full", "lora"), default="lora"
+    )
+    parser.add_argument(
+        "--device", choices=("auto", "cpu", "cuda", "mps"), default="auto"
+    )
+
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--eval-batch-size", type=int, default=None)
     parser.add_argument("--max-train-examples", type=int, default=None)
     parser.add_argument("--max-validation-examples", type=int, default=None)
-    parser.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=False)
+
+    parser.add_argument(
+        "--bf16", action=argparse.BooleanOptionalAction, default=False
+    )
     parser.add_argument("--save-every-epoch", action="store_true")
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
+
     parser.add_argument("--max-input-length", type=int, default=512)
     parser.add_argument("--max-target-length", type=int, default=256)
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--num-beams", type=int, default=4)
+
     parser.add_argument("--lora-r", type=int, default=8)
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
-    parser.add_argument("--output-dir", type=Path, default=Path("training_outputs"))
+
+    parser.add_argument(
+        "--output-dir", type=Path, default=Path("training_outputs")
+    )
     parser.add_argument("--seed", type=int, default=42)
+
+    # Find the YAML first, then use it as defaults for the full argument parse.
     config_args, _ = parser.parse_known_args(argv)
     if config_args.config is not None:
-        settings = yaml.safe_load(config_args.config.read_text(encoding="utf-8"))
+        settings = yaml.safe_load(
+            config_args.config.read_text(encoding="utf-8")
+        )
         if "output_dir" in settings:
+            # Relative YAML paths belong to the config file's directory.
             settings["output_dir"] = (
                 config_args.config.resolve().parent / settings["output_dir"]
             ).resolve()
         parser.set_defaults(**settings)
+
+    # Explicit command-line options now override the loaded YAML defaults.
     args = parser.parse_args(argv)
+
+    # Apply smoke limits last so they also constrain YAML/CLI values.
     if args.smoke:
         args.epochs = 1
         args.batch_size = min(args.batch_size, 2)
@@ -383,44 +741,68 @@ def parse_config(argv=None):
         args.max_new_tokens = min(args.max_new_tokens, 32)
         args.num_beams = 1
         args.output_dir = args.output_dir / "smoke"
+
     config = {
         "model": {
-            "model_name": args.model_name, "fine_tuning_mode": args.fine_tuning_mode,
-            "lora_r": args.lora_r, "lora_alpha": args.lora_alpha,
-            "lora_dropout": args.lora_dropout, "lora_target_modules": ["q", "v"],
+            "model_name": args.model_name,
+            "fine_tuning_mode": args.fine_tuning_mode,
+            "lora_r": args.lora_r,
+            "lora_alpha": args.lora_alpha,
+            "lora_dropout": args.lora_dropout,
+            "lora_target_modules": ["q", "v"],
         },
         "data": {
-            "dataset_id": RadiologyData.DATASET_ID, "smoke": args.smoke,
-            "batch_size": args.batch_size, "max_input_length": args.max_input_length,
-            "max_target_length": args.max_target_length, "prompt_template": DEFAULT_PROMPT_TEMPLATE,
-            "eval_batch_size": args.eval_batch_size, "max_train_examples": args.max_train_examples,
+            "dataset_id": RadiologyData.DATASET_ID,
+            "smoke": args.smoke,
+            "batch_size": args.batch_size,
+            "max_input_length": args.max_input_length,
+            "max_target_length": args.max_target_length,
+            "prompt_template": DEFAULT_PROMPT_TEMPLATE,
+            "eval_batch_size": args.eval_batch_size,
+            "max_train_examples": args.max_train_examples,
             "max_validation_examples": args.max_validation_examples,
         },
         "training": {
-            "device": str(select_device(args.device)), "epochs": args.epochs,
-            "learning_rate": args.learning_rate, "weight_decay": args.weight_decay,
+            "device": str(select_device(args.device)),
+            "epochs": args.epochs,
+            "learning_rate": args.learning_rate,
+            "weight_decay": args.weight_decay,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
-            "max_grad_norm": args.max_grad_norm, "max_new_tokens": args.max_new_tokens,
-            "num_beams": args.num_beams, "output_dir": str(args.output_dir),
-            "bf16": args.bf16, "save_every_epoch": args.save_every_epoch,
+            "max_grad_norm": args.max_grad_norm,
+            "max_new_tokens": args.max_new_tokens,
+            "num_beams": args.num_beams,
+            "output_dir": str(args.output_dir),
+            "bf16": args.bf16,
+            "save_every_epoch": args.save_every_epoch,
         },
     }
     return config, args.seed
 
 
 def main():
+    """Runs training from the command line with seeded randomness and logging.
+
+    Loads the tokenizer and model, then writes training artifacts to output_dir.
+    """
     config, seed = parse_config()
     set_seed(seed)
     logger = configure_logger(output_dir=config["training"]["output_dir"])
     if config["data"]["smoke"]:
-        logger.info("Smoke test: 16 train/8 validation rows, one epoch; uncached downloads still required.")
+        logger.info(
+            "Smoke test: 16 train/8 validation rows, one epoch; "
+            "uncached downloads still required."
+        )
+
     tokenizer = AutoTokenizer.from_pretrained(config["model"]["model_name"])
     data = RadiologyData(tokenizer, config["data"])
     model = load_model(**config["model"])
     trainer = RadiologyTrainer(model, data, config)
-    logger.info("Trainable parameters: %s / %s",
-                sum(p.numel() for p in model.parameters() if p.requires_grad),
-                sum(p.numel() for p in model.parameters()))
+
+    logger.info(
+        "Trainable parameters: %s / %s",
+        sum(p.numel() for p in model.parameters() if p.requires_grad),
+        sum(p.numel() for p in model.parameters()),
+    )
     trainer.fit()
 
 
