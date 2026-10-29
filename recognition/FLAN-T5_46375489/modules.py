@@ -6,13 +6,16 @@ from transformers import AutoModelForSeq2SeqLM
 DEFAULT_MODEL_NAME = "google/flan-t5-base"
 
 
-def load_model(model_name=DEFAULT_MODEL_NAME, fine_tuning_mode="lora",
-               lora_r=8, lora_alpha=16, lora_dropout=0.05,
-               lora_target_modules=("q", "v"), model_revision=None):
+def load_model(model_name=DEFAULT_MODEL_NAME,
+               fine_tuning_mode="lora",
+               lora_r=8,
+               lora_alpha=16,
+               lora_dropout=0.05,
+               lora_target_modules=("q", "v"),
+               model_revision=None):
     """Loads a pretrained model, optionally adding new LoRA adapters.
 
-    Full checkpoints use "full" mode. For saved LoRA adapters, use 
-    RadiologyPredictor.from_checkpoint(). Training state is not restored.
+    Full checkpoints use "full" mode. For saved LoRA adapters, use RadiologyPredictor.from_checkpoint(). Only the model weights are loaded.
 
     Args:
         model_name: Hub ID (str) or full checkpoint directory (str or PathLike).
@@ -38,7 +41,8 @@ def load_model(model_name=DEFAULT_MODEL_NAME, fine_tuning_mode="lora",
     )
 
     if fine_tuning_mode == "lora":
-        model = get_peft_model(model,
+        model = get_peft_model(
+            model,
             LoraConfig(
                 task_type=TaskType.SEQ_2_SEQ_LM,
                 r=lora_r,
@@ -46,6 +50,7 @@ def load_model(model_name=DEFAULT_MODEL_NAME, fine_tuning_mode="lora",
                 lora_dropout=lora_dropout,
                 target_modules=list(lora_target_modules),
                 bias="none",
-        ))
+            )
+        )
 
     return model
