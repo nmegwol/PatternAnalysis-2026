@@ -18,6 +18,7 @@ class RadiologyData:
     DATASET_ID = "BioLaySumm/BioLaySumm2025-LaymanRRG-opensource-track"
     SOURCE_COLUMN = "radiology_report"
     TARGET_COLUMN = "layman_report"
+    SMOKE_ROWS = {"train": 16, "validation": 8}
 
     def __init__(self, tokenizer, config):
         """Stores the tokenizer and configuration without loading data.
@@ -35,7 +36,7 @@ class RadiologyData:
     def load(self):
         """Loads dataset rows and stores their tokenised forms.
 
-        Smoke mode selects the first 16 training and 8 validation rows.
+        Smoke mode selects up to 16 training and 8 validation rows.
         Optional example limits also select prefixes of those splits. Both
         subset modes omit test data; full loading excludes test references from
         tokenisation. Split membership and row order are preserved.
@@ -46,57 +47,67 @@ class RadiologyData:
 
         self._raw_splits = load_dataset(
             self.config["dataset_id"],
-            revision=self.config.get("revision")
+            revision=self.config.get("revision"),
         )
-
-        if self.config["smoke"]:
+        limits = self._row_limits()
+        if limits is not None:
             # Select before tokenisation; never process test rows here.
-            self._raw_splits = DatasetDict({
-                split: self._raw_splits[split].select(range(count))
-                for split, count in (("train", 16), ("validation", 8))
-            })
-        elif any(self.config.get(key) is not None for key in ("max_train_examples", "max_validation_examples")):
-            self._raw_splits = DatasetDict({
-                split: self._raw_splits[split].select(range(min(count, len(self._raw_splits[split]))))
-                if count is not None else self._raw_splits[split]
-                for split, count in (
-                    ("train", self.config.get("max_train_examples")),
-                    ("validation", self.config.get("max_validation_examples")),
-                )
-            })
+            self._raw_splits = DatasetDict(
+                {
+                    split: _head(self._raw_splits[split], count)
+                    for split, count in limits.items()
+                }
+            )
 
         self._tokenised_splits = DatasetDict()
         for split, rows in self._raw_splits.items():
-            # The fixed test split contains only withheld (empty) references.
-            if split == "test":
-                rows = rows.remove_columns(self.TARGET_COLUMN)
             self._tokenised_splits[split] = rows.map(
                 self._tokenise_batch,
                 batched=True,
                 remove_columns=rows.column_names,
+                # Test references are withheld; never turn them into labels.
+                fn_kwargs={"with_labels": split != "test"},
                 desc=f"Tokenising {split}",
             )
 
-    def _tokenise_batch(self, examples):
+    def _row_limits(self):
+        """Returns train/validation limits, or None to keep all splits."""
+        if self.config["smoke"]:
+            return dict(self.SMOKE_ROWS)
+
+        limits = {
+            "train": self.config.get("max_train_examples"),
+            "validation": self.config.get("max_validation_examples"),
+        }
+        return limits if any(n is not None for n in limits.values()) else None
+
+    def _tokenise_batch(self, examples, with_labels=None):
         """Tokenises and truncates prompted reports and optional targets.
 
         Args:
             examples: Dict mapping column names to lists of strings. Requires
                 radiology_report; layman_report is optional.
+            with_labels: Whether to tokenise targets. None infers this from
+                the presence of layman_report, preserving direct-call usage.
 
         Returns:
             A dict of unpadded input IDs and attention masks, plus labels when
-            targets are present. Padding and -100 label masking happen later
+            requested. Padding and -100 label masking happen later
             in the dataloader's collator.
         """
+        prompts = [
+            self.config["prompt_template"].format(report=report)
+            for report in examples[self.SOURCE_COLUMN]
+        ]
         encoded = self.tokenizer(
-            [self.config["prompt_template"].format(report=report) for report in examples[self.SOURCE_COLUMN]],
+            prompts,
             max_length=self.config["max_input_length"],
             truncation=True,
             padding=False,
         )
-        # Train/validation have targets; test input batches intentionally omit them.
-        if self.TARGET_COLUMN in examples:
+        if with_labels is None:
+            with_labels = self.TARGET_COLUMN in examples
+        if with_labels:
             targets = self.tokenizer(
                 text_target=examples[self.TARGET_COLUMN],
                 max_length=self.config["max_target_length"],
@@ -106,6 +117,28 @@ class RadiologyData:
             encoded["labels"] = targets["input_ids"]
         # Label padding is introduced and masked with -100 by the collator.
         return dict(encoded)
+
+    def references(self, split):
+        """Returns the full reference texts from a loaded split.
+
+        Args:
+            split: Name of a loaded dataset split.
+
+        Returns:
+            The reference column, without target-length truncation.
+        """
+        return self._raw_splits[split][self.TARGET_COLUMN]
+
+    def num_examples(self, split):
+        """Returns the number of selected rows in a loaded split.
+
+        Args:
+            split: Name of a loaded dataset split.
+
+        Returns:
+            The split's row count as an integer.
+        """
+        return len(self._raw_splits[split])
 
     def dataloader(self, split, shuffle=None):
         """Creates a padded DataLoader for a previously loaded split.
@@ -125,9 +158,10 @@ class RadiologyData:
             KeyError: If the requested split was not loaded.
         """
         if split == "test":
+            # Keep test batches input-only, without even a labels=None field.
             collator = DataCollatorWithPadding(
                 self.tokenizer,
-                return_tensors="pt"
+                return_tensors="pt",
             )
         else:
             collator = DataCollatorForSeq2Seq(
@@ -137,10 +171,18 @@ class RadiologyData:
                 return_tensors="pt",
             )
 
+        batch_size = self.config["batch_size"]
+        if split != "train":
+            batch_size = self.config.get("eval_batch_size") or batch_size
+
         return DataLoader(
             self._tokenised_splits[split],
-            batch_size=(self.config["batch_size"] if split == "train" else
-                        self.config.get("eval_batch_size") or self.config["batch_size"]),
+            batch_size=batch_size,
             shuffle=(split == "train") if shuffle is None else shuffle,
             collate_fn=collator,
         )
+
+
+def _head(rows, limit):
+    """Returns up to limit leading rows, or all rows when limit is None."""
+    return rows if limit is None else rows.select(range(min(limit, len(rows))))

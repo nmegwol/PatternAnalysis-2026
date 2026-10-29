@@ -1,14 +1,13 @@
 """Load checkpoints and generate simplified reports."""
 
 from pathlib import Path
-from time import perf_counter
 
 import torch
 from peft import PeftModel
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from modules import DEFAULT_MODEL_NAME
-from utils import DEFAULT_PROMPT_TEMPLATE, read_json, write_json
+from modules import DEFAULT_MODEL_NAME, FINE_TUNING_MODES
+from utils import DEFAULT_PROMPT_TEMPLATE, DeviceClock, read_json, write_json
 
 
 # Shared metadata saved with both prediction and training resource metrics.
@@ -22,6 +21,33 @@ GENERATION_METRICS_SCOPE = (
     "scoring and file writes. Tokens/second is total returned tokens divided "
     "by total generation seconds across batches."
 )
+
+
+def count_generated_tokens(tokens, eos_token_ids):
+    """Counts returned tokens through the first EOS, including EOS itself.
+
+    Args:
+        tokens: Token-ID tensor shaped (batch, length), with decoder-start
+            already removed.
+        eos_token_ids: One EOS ID, a list/tuple of IDs, or None.
+
+    Returns:
+        A list of counts, one per sequence. Without EOS, every position counts;
+        an empty sequence counts as zero.
+    """
+    eos_mask = torch.zeros_like(tokens, dtype=torch.bool)
+    if eos_token_ids is not None:
+        # Generation accepts one EOS ID or several alternative stopping IDs.
+        if not isinstance(eos_token_ids, (list, tuple)):
+            eos_token_ids = [eos_token_ids]
+        for token_id in eos_token_ids:
+            eos_mask |= tokens.eq(token_id)
+
+    # Include positions with no earlier EOS, including the first EOS itself.
+    # Padding after it is excluded even when PAD and EOS share the same ID.
+    earlier_eos_count = eos_mask.cumsum(dim=1) - eos_mask.long()
+    through_first_eos = earlier_eos_count == 0
+    return through_first_eos.sum(dim=1).tolist()
 
 
 @torch.inference_mode()
@@ -40,44 +66,20 @@ def generate_with_metrics(model, inputs, **generation_kwargs):
         A (token_ids, metrics) tuple. token_ids is the generated tensor; metrics
         records total and per-sequence token counts, seconds and tokens/second.
     """
-    device = inputs["input_ids"].device
-
-    def synchronize():
-        """Waits for pending accelerator work; does nothing on CPU."""
-        if device.type == "cuda":
-            torch.cuda.synchronize(device)
-        elif device.type == "mps":
-            torch.mps.synchronize()
-
-    # Accelerator calls are asynchronous, so wait on both sides of generation.
-    synchronize()
-    started = perf_counter()
+    # DeviceClock waits for accelerator work before and after generation.
+    clock = DeviceClock(inputs["input_ids"].device)
     generated = model.generate(**inputs, **generation_kwargs)
-    synchronize()
-    generation_seconds = perf_counter() - started
+    generation_seconds = clock.elapsed()
 
-    # The initial decoder-start token is supplied by the model, not generated.
-    tokens = generated[:, 1:]
+    # Use the stopping IDs supplied to this call, including an explicit None.
     generation_config = (
         generation_kwargs.get("generation_config") or model.generation_config
     )
     eos_ids = generation_kwargs.get(
         "eos_token_id", generation_config.eos_token_id
     )
-    eos_mask = torch.zeros_like(tokens, dtype=torch.bool)
-    if eos_ids is not None:
-        # Generation supports either one EOS ID or several alternative EOS IDs.
-        if not isinstance(eos_ids, (list, tuple)):
-            eos_ids = [eos_ids]
-        for token_id in eos_ids:
-            eos_mask |= tokens.eq(token_id)
-
-    # Count tokens with no earlier EOS, including the first EOS itself.
-    # This excludes trailing padding even when PAD and EOS share an ID.
-    # With no EOS, every returned position after decoder-start is counted.
-    earlier_eos_count = eos_mask.cumsum(dim=1) - eos_mask.long()
-    through_first_eos = earlier_eos_count == 0
-    token_counts = through_first_eos.sum(dim=1).tolist()
+    # The initial decoder-start token is supplied by the model, not generated.
+    token_counts = count_generated_tokens(generated[:, 1:], eos_ids)
     total_tokens = sum(token_counts)
 
     return generated, {
@@ -86,6 +88,20 @@ def generate_with_metrics(model, inputs, **generation_kwargs):
         "generation_seconds": generation_seconds,
         "generated_tokens_per_second": total_tokens / generation_seconds,
     }
+
+
+def decode(tokenizer, generated):
+    """Decodes generated IDs into summary strings without special tokens.
+
+    Args:
+        tokenizer: Hugging Face tokenizer matching the generated token IDs.
+        generated: Batch of generated token sequences.
+
+    Returns:
+        A list of strings with surrounding whitespace removed.
+    """
+    texts = tokenizer.batch_decode(generated, skip_special_tokens=True)
+    return [text.strip() for text in texts]
 
 
 class RadiologyPredictor:
@@ -160,7 +176,7 @@ class RadiologyPredictor:
         Raises:
             ValueError: If fine_tuning_mode is unsupported.
         """
-        if fine_tuning_mode not in ("full", "lora"):
+        if fine_tuning_mode not in FINE_TUNING_MODES:
             raise ValueError("fine_tuning_mode must be 'full' or 'lora'.")
 
         if fine_tuning_mode == "full":
@@ -226,10 +242,7 @@ class RadiologyPredictor:
             )
             generated_tokens += metrics["generated_tokens"]
             generation_seconds += metrics["generation_seconds"]
-            decoded = self.tokenizer.batch_decode(
-                generated, skip_special_tokens=True
-            )
-            predictions.extend(text.strip() for text in decoded)
+            predictions.extend(decode(self.tokenizer, generated))
 
         # Use total tokens / total time so each batch is weighted by its time.
         # Empty input has no generation time and therefore zero throughput.
