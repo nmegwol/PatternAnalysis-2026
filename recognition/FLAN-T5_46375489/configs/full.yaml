@@ -1,0 +1,21 @@
+# From the module directory: python train.py --config configs/full.yaml
+# Override individual settings: add --batch-size 1 --device cuda, for example.
+# Requires PyYAML. The dataset is fixed in dataset.py.
+model_name: google/flan-t5-base
+fine_tuning_mode: full
+
+device: auto
+epochs: 5
+batch_size: 4
+learning_rate: 0.0002
+weight_decay: 0.01
+gradient_accumulation_steps: 1
+max_grad_norm: 1.0
+max_input_length: 512
+max_target_length: 256
+max_new_tokens: 256
+num_beams: 4
+seed: 42
+
+# Relative to this YAML file; CLI --output-dir stays relative to the caller.
+output_dir: ../outputs/full
