@@ -331,9 +331,9 @@ The **implemented baseline** uses pretrained `google/flan-t5-base` without adapt
 
 ### 7.1. Controlled comparison
 
-Pretrained FLAN-T5-base, LoRA and full fine-tuning were compared in separate A100 GPU sessions. Both training methods completed two passes (epochs) through 150,454 training reports. The baseline and four saved models were evaluated on the same 10,000 validation reports in their original order.
+Pretrained FLAN-T5-base, LoRA and full fine-tuning were compared in separate sessions using the same GPU model (Table [1](#tab-experiment-settings)). Both training methods completed two passes (epochs) through 150,454 training reports. Each epoch had 9,404 updates, including a final batch of six reports, giving 18,808 updates per method overall. The baseline and four saved models were evaluated on the same 10,000 validation reports in their original order.
 
-All runs used FLAN-T5-base revision `7bcac572ce56db69c1ea7c8af255c5d7c9672fc2`, the dataset version in Section [5](#sec-dataset), and identical prompts and generation settings. Seed 42 controlled randomness. A separate random generator, seeded with $42+\text{epoch}$, gave both training methods the same shuffled batches in each epoch.
+All runs used the model and dataset revisions in Table [1](#tab-experiment-settings), with identical prompts and generation settings. Seed 42 controlled randomness. A separate random generator, seeded with $42+\text{epoch}$, gave both training methods the same shuffled batches in each epoch.
 
 Before checkpoint evaluation, the experiment scripts moved the training model and optimiser state to CPU memory, then reloaded the saved weights. LoRA adapters remained separate from the base weights. The checkpoint with the lowest validation loss was selected as best.
 
@@ -341,29 +341,31 @@ Before checkpoint evaluation, the experiment scripts moved the training model an
 
 ### 7.2. Scoring and measurement
 
-**Scores.** Both metrics were calculated on all 10,000 validation reports, once for the pretrained baseline and after each LoRA/full-tuning epoch, with weights fixed.
+**Scores.** Validation loss and ROUGE were calculated on all 10,000 validation reports, once for the pretrained baseline and after each LoRA/full-tuning epoch, with weights fixed.
 
-- **Validation loss:** Average cross-entropy over non-padding reference tokens (up to 256 per summary), using the report and earlier reference tokens. Lower is better.
-- **ROUGE:** Mean per-report ROUGE-1/2/L/Lsum F1 scores (0–1), measuring wording overlap between summaries generated without references and the complete references; higher is better ([Lin 2004](#ref-rouge)). Scoring uses `rouge-score` 0.1.2 with word stemming; ROUGE-Lsum also uses sentence boundaries.
+- **Validation loss:** Total cross-entropy divided by the number of non-padding reference tokens across the split (up to 256 per summary), using the report and earlier reference tokens. Lower is better.
+- **ROUGE:** Mean per-report ROUGE-1/2/L/Lsum F1 scores (0–1), measuring wording overlap between summaries generated without references and the complete references; higher is better ([Lin 2004](#ref-rouge)). Scoring uses `rouge-score` 0.1.2 with lowercasing, punctuation removal and word stemming. For ROUGE-Lsum, sentences are split at existing newlines and after `.`, `!` or `?` followed by whitespace.
 
-**Time.** Training time excludes initial loading, evaluation and checkpoint operations. Total evaluation time includes generation, text processing, data transfer, loss calculation, scoring and output writing. Loading is reported separately.
+**Time.** Training time excludes initial loading, evaluation and checkpoint operations. Total evaluation time includes generation, text processing, data transfer, loss calculation, scoring and output writing, but excludes model and dataset loading.
 
 **Generation speed.** Tokens per second are measured during generation only. Counts include the end-of-sequence token (EOS), but exclude the decoder-start token and later padding. Training and generation timers wait for GPU work to finish before starting and stopping.
 
 **Memory.** Peak GPU memory is reported in GiB: allocated memory holds active tensors; reserved memory also includes PyTorch’s cached space.
 
-### 7.3. Hyperparameters and dataset version
-
-**Dataset version:** `6783ab38f9de28c4372799346f51d3927ae7eb9a`.
+### 7.3. Experiment settings
 
 <a id="tab-experiment-settings"></a>
 
-**Table 1.** Experiment hyperparameters. LoRA settings apply only to the adapter-based runs.
+**Table 1.** Experiment settings. LoRA settings apply only to the adapter-based runs.
 
 | Setting | Value |
 |:---|:---|
+| Model revision | `google/flan-t5-base`: `7bcac572ce56db69c1ea7c8af255c5d7c9672fc2` |
+| Dataset revision | `6783ab38f9de28c4372799346f51d3927ae7eb9a` |
+| GPU | NVIDIA A100-SXM4-40GB |
+| PyTorch / CUDA | 2.11.0+cu130 / 13.0 |
 | Training | 2 epochs; batch size 16; gradient accumulation 1 |
-| Optimisation | AdamW ([Loshchilov and Hutter 2019](#ref-adamw)); constant learning rate $2\times10^{-4}$; weight decay 0.01; gradient-norm limit 1.0 |
+| Optimisation | AdamW ([Loshchilov and Hutter 2019](#ref-adamw)); constant learning rate $2\times10^{-4}$ with no warmup or schedule; weight decay 0.01; gradient-norm limit 1.0 |
 | LoRA | Rank 8; $\alpha=16$; dropout 0.05; attention query/value projections |
 | Lengths | Prompted input at most 512 tokens; loss targets at most 256 tokens |
 | Generation | At most 256 new tokens; greedy decoding; one beam; no sampling |
@@ -401,19 +403,28 @@ Both training methods improve all four ROUGE scores over the baseline (Figure [
 
 The second epoch increases ROUGE-Lsum by 0.0143 for LoRA and 0.0053 for full fine-tuning. Both validation losses also fall. The final comparison uses epoch 2.
 
+**Uncertainty.** Paired percentile bootstrap intervals use 10,000 resamples of the same 10,000 validation rows across checkpoints (seed 42).
+
+| ROUGE-Lsum comparison | Mean gain | 95% interval |
+|:---|---:|---:|
+| Full epoch 2 − LoRA epoch 2 | 0.04535 | 0.04274–0.04802 |
+| Full epoch 2 − Full epoch 1 | 0.00533 | 0.00310–0.00753 |
+
+Both intervals exclude zero. They assume independent rows and fixed checkpoints; they do not account for repeated-report or patient clusters, training-seed variation, or bias from validation reuse and training overlap.
+
 <a id="training-behaviour-and-cost"></a>
 
 ### 8.2. Training behaviour and cost
 
-Average training loss falls from 1.2317 to 1.0012 for LoRA and from 0.7045 to 0.5393 for full fine-tuning. Loss falls most quickly early in training (Figure [4](#fig-training-history)). Training loss is measured while dropout is active and the model’s weights are still being updated. Validation loss is measured with dropout turned off and the saved weights held fixed. These different conditions help explain why the two losses are at different levels.
+Average training loss falls from 1.2317 to 1.0012 for LoRA and from 0.7045 to 0.5393 for full fine-tuning. Loss falls most quickly early in training (Figure [4](#fig-training-history)). Training loss is measured while dropout is active and the model’s weights are still being updated. Validation loss is measured with dropout turned off and the saved weights held fixed. These different conditions help explain why the two losses are at different levels. Training overlap (Section [9.3](#sec-sentence-overlap)) may also affect validation loss; its effect was not measured.
 
 <a id="fig-training-history"></a>
 
-![Figure 4. Training loss at each update, a smoothed average over the most recent updates (up to 200, weighted by token count), and loss on the complete validation set at each saved epoch.](figures/training_history.png)
+![Training and validation loss for LoRA and full fine-tuning, with the shared pretrained baseline at epoch zero.](figures/training_history.png)
 
-**Figure 4.** Training loss at each update, a smoothed average over the most recent updates (up to 200, weighted by token count), and loss on the complete validation set at each saved epoch.
+**Figure 4.** Training loss at each update, its token-weighted trailing mean over up to 200 updates, and validation loss at each saved epoch. The epoch-zero markers show the separately evaluated pretrained baseline (2.3083), shared as a reference for both methods.
 
-LoRA updates 884,736 parameters, 99.64% fewer than full fine-tuning, and reduces peak allocated training memory by 18.6%. Both methods run the base model and keep its intermediate results (activations) in memory. Their training times are similar: 58.18 minutes for LoRA and 58.01 minutes for full fine-tuning over two epochs.
+LoRA updates 884,736 parameters, 99.64% fewer than full fine-tuning, and reduces peak allocated training memory by 18.6%. Freezing weights reduces gradient and optimiser storage, but both methods still require the base model and training activations. Their training times are similar: 58.18 minutes for LoRA and 58.01 minutes for full fine-tuning over two epochs.
 
 <a id="tab-training-resources"></a>
 
@@ -425,11 +436,24 @@ LoRA updates 884,736 parameters, 99.64% fewer than full fine-tuning, and reduces
 | LoRA     |   248.463 |       0.885 |     58.18 |      18.71 |       23.37 |
 | Full     |   247.578 |     247.578 |     58.01 |      22.98 |       26.52 |
 
+**Resource criterion.** Recorded training plus validation time is below 60 minutes in every epoch:
+
+| Method | Epoch 1 (min) | Epoch 2 (min) |
+|:---|---:|---:|
+| LoRA | 57.79 | 59.10 |
+| Full | 53.01 | 51.80 |
+
+Peak reserved memory is at most 26.52 GiB (28.48 GB), below the 32 GB limit. Both methods meet criterion 3 under this measured timing scope, with only 0.90 minutes of headroom for LoRA's second epoch. These sums exclude loading, checkpoint operations and other experiment-harness overhead.
+
+**Checkpoint storage.** Saved epoch-2 training checkpoints, including optimiser state, occupy 14.03 MB for LoRA and 2.97 GB for full fine-tuning. Adapter/model weights alone occupy 3.56 MB and 990.35 MB, respectively (decimal units). LoRA's checkpoint excludes the frozen base weights, which are still required for inference.
+
 <a id="inference"></a>
 
 ### 8.3. Inference
 
 The final fully fine-tuned model generates 374.26 tokens/s, compared with 279.69 for LoRA with its adapters kept separate from the base model (unmerged LoRA) (Table [4](#tab-inference-resources)). The baseline generates fewer tokens per report and finishes its evaluation sooner. Total evaluation time averages 106.07, 179.30 and 138.19 ms per report for the baseline, LoRA and full fine-tuning. These averages come from evaluating reports in batches of 32 and dividing the total time by 10,000 reports.
+
+Tokens/s also depends on output lengths and their variation within batches, as well as unmerged adapter computation. The individual effects were not isolated in these measurements.
 
 <a id="tab-inference-resources"></a>
 
@@ -441,7 +465,7 @@ The final fully fine-tuned model generates 374.26 tokens/s, compared with 279.69
 | LoRA | 1729.58 | 1793.04 | 179.30 | 279.69 | 48.38 | 3.82 / 5.68 |
 | Full | 1320.07 | 1381.87 | 138.19 | 374.26 | 49.40 | 3.82 / 5.63 |
 
-The average milliseconds per report are amortised over batches of 32 and include the full evaluation workload. They are not single-request latency measurements. Training minutes in Table 3 exclude evaluation and checkpoint operations.
+The average milliseconds per report are amortised over batches of 32 and include the full evaluation workload. They are not single-request latency measurements.
 
 <a id="sec-safety"></a>
 
