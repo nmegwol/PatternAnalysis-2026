@@ -5,7 +5,7 @@
 Weiming Liang — 46375489  
 COMP3710, Task 2.6
 
-[Problem](#sec-problem) · [Algorithm](#sec-algorithm) · [Feasibility review](#sec-feasibility) · [Example inputs and outputs](#sec-examples) · [Data](#sec-dataset) · [Installation and usage](#sec-usage) · [Reproducibility](#sec-experiments) · [Results](#sec-results) · [Error analysis](#sec-safety) · [Recommendation](#sec-recommendation) · [AI disclosure](#sec-ai-disclosure) · [References](#sec-references)
+[Problem](#sec-problem) · [Algorithm](#sec-algorithm) · [Feasibility review](#sec-feasibility) · [Example inputs and outputs](#sec-examples) · [Data](#sec-dataset) · [Implementation and usage](#sec-usage) · [Reproducibility](#sec-experiments) · [Results](#sec-results) · [Error analysis](#sec-safety) · [Recommendation](#sec-recommendation) · [AI disclosure](#sec-ai-disclosure) · [References](#sec-references)
 
 <a id="sec-problem"></a>
 
