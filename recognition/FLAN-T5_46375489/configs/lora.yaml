@@ -1,6 +1,7 @@
 # From the module directory: python train.py --config configs/lora.yaml
 # Override individual settings: add --epochs 1 --device cuda, for example.
-# Requires PyYAML. The dataset is fixed in dataset.py.
+# Requires PyYAML. The dataset ID is fixed in dataset.py; its version is not.
+# CLI/YAML settings do not pin model or dataset Hub revisions.
 model_name: google/flan-t5-base
 fine_tuning_mode: lora
 lora_r: 8
@@ -17,6 +18,7 @@ max_grad_norm: 1.0
 max_input_length: 512
 max_target_length: 256
 max_new_tokens: 256
+# The final experiment used greedy decoding: override with --num-beams 1.
 num_beams: 4
 seed: 42
 

@@ -1,4 +1,4 @@
-"""Load and batch LaymanRRG radiology reports for summarisation."""
+"""Loads and batches LaymanRRG reports for plain-language summarisation."""
 
 from datasets import DatasetDict
 from torch.utils.data import DataLoader
@@ -22,6 +22,9 @@ class RadiologyData:
 
     def __init__(self, tokenizer, config):
         """Stores the tokenizer and configuration without loading data.
+
+        Programmatic callers can set revision to a Hub branch, tag or commit.
+        CLI/YAML configuration leaves it unset, using the Hub default revision.
 
         Args:
             tokenizer: A Hugging Face PreTrainedTokenizerBase instance.

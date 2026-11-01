@@ -1,4 +1,4 @@
-"""Load checkpoints and generate simplified reports."""
+"""Loads checkpoints and generates plain-language radiology summaries."""
 
 from pathlib import Path
 
@@ -136,7 +136,8 @@ class RadiologyPredictor:
             batch_size: Integer number of reports per generation batch.
             max_input_length: Integer token limit for each prompted report.
             max_new_tokens: Integer limit on generated tokens per report.
-            num_beams: Integer beam count; 1 uses greedy decoding.
+            num_beams: Integer beam count, default 4. The final experiment
+                used 1 for greedy decoding.
             prompt_template: Prompt string containing a {report} placeholder.
         """
         self.model = model.to(device)
@@ -161,7 +162,9 @@ class RadiologyPredictor:
     ):
         """Restores model weights and a tokenizer for inference.
 
-        Optimizer state and training progress are not restored.
+        Optimiser state and training progress are not restored. Inference
+        settings are not read from config_run.json; pass them via kwargs.
+        For LoRA, use the base-model name and revision used during training.
 
         Args:
             checkpoint_dir: Saved model or adapter directory (str or PathLike).

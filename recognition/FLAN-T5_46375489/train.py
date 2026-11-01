@@ -94,7 +94,7 @@ METRIC_SCOPES = {
 
 @dataclass
 class _UpdateWindow:
-    """Token-weighted loss and counts for one accumulated optimizer update."""
+    """Token-weighted loss and counts for one accumulated optimiser update."""
 
     loss_sum: float = 0.0
     tokens: int = 0
@@ -112,7 +112,7 @@ class RadiologyTrainer:
 
     Attributes:
         history: List of metric/resource dicts, one per completed epoch.
-        step_history: List of training metric dicts, one per optimizer update.
+        step_history: List of training metric dicts, one per optimiser update.
         output_dir: pathlib.Path where logs, plots and checkpoints are saved.
     """
 
@@ -163,7 +163,7 @@ class RadiologyTrainer:
     def fit(self):
         """Runs training epochs and saves validation metrics and checkpoints.
 
-        Creates a fresh optimizer and resets the step CSV. Use a new trainer
+        Creates a fresh optimiser and resets the step CSV. Use a new trainer
         instance for a fresh run.
 
         Returns:
@@ -182,7 +182,7 @@ class RadiologyTrainer:
         return self.history
 
     def _prepare_run(self):
-        """Loads data, places the model and creates a fresh optimizer."""
+        """Loads data, places the model and creates a fresh optimiser."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         (self.output_dir / "step_history.csv").write_text("", encoding="utf-8")
 
@@ -350,20 +350,7 @@ class RadiologyTrainer:
         )
 
     def _measure_stage(self, operation, *args):
-        """Times an operation and records CUDA allocator peaks.
-
-        Synchronises the device around the call and resets CUDA peak counters
-        without clearing cached memory.
-
-        Args:
-            operation: Callable to execute and measure.
-            *args: Positional arguments forwarded to operation.
-
-        Returns:
-            A (result, resources) tuple. resources is a dict of elapsed seconds
-            and peak allocated/reserved CUDA memory in GiB. Memory fields are
-            None on CPU or MPS.
-        """
+        """Calls utils.measure_stage on this trainer's device; see its contract."""
         return measure_stage(self.device, operation, *args)
 
     def _synchronize(self):
@@ -373,7 +360,7 @@ class RadiologyTrainer:
     def _train_one_epoch(self, loader):
         """Trains one epoch with token-weighted gradient accumulation.
 
-        Requires an initialised optimizer. Clips gradients and records each
+        Requires an initialised optimiser. Clips gradients and records each
         update in step_history and its CSV, including a final partial window.
 
         Args:
@@ -389,7 +376,7 @@ class RadiologyTrainer:
         total_loss = 0.0
         total_tokens = 0
 
-        # A window groups the batches contributing to one optimizer update.
+        # A window groups the batches contributing to one optimiser update.
         window = _UpdateWindow()
         accumulation_steps = self.settings["gradient_accumulation_steps"]
         # Read current parameters after placement; do not cache before .to().
@@ -468,11 +455,11 @@ class RadiologyTrainer:
     def _step_record(
         self, window, seconds, grad_norm, learning_rate, step, batches
     ):
-        """Builds the metric row for a completed optimizer update.
+        """Builds the metric row for a completed optimiser update.
 
         Args:
             window: Loss, target-token and example totals for this update.
-            seconds: Synchronized window time, excluding CSV writes.
+            seconds: Synchronised window time, excluding CSV writes.
             grad_norm: Gradient norm before clipping.
             learning_rate: Learning rate used for the update.
             step: One-based index of the last batch in this window.
@@ -577,7 +564,7 @@ class RadiologyTrainer:
     def save_checkpoint(self, name="latest"):
         """Saves model weights or adapters, tokenizer, settings and run state.
 
-        Requires an initialised optimizer. Run state includes optimizer state,
+        Requires an initialised optimiser. Run state includes optimiser state,
         epoch/update counters, history and the CPU PyTorch RNG state. Automatic
         training resumption is not implemented.
 
@@ -595,7 +582,7 @@ class RadiologyTrainer:
         self.data.tokenizer.save_pretrained(checkpoint_dir)
         write_json(self.config, checkpoint_dir / "config_run.json")
 
-        # Keep optimizer/counter state separate from inference model files.
+        # Keep optimiser/counter state separate from inference model files.
         torch.save(
             {
                 "optimizer": self._optimizer.state_dict(),
@@ -703,7 +690,10 @@ def rouge_scores(predictions, references, metric_names):
 
 
 def _build_parser():
-    """Returns the command-line parser and its documented default settings."""
+    """Builds and returns the command-line parser with its default settings.
+
+    Ordinary runs default to four beams; the final experiment used one.
+    """
     parser = argparse.ArgumentParser(
         description="Fine-tune FLAN-T5 on official LaymanRRG splits."
     )
@@ -868,7 +858,9 @@ def parse_config(argv=None):
     appends /smoke to the output directory.
 
     YAML values are checked after CLI overrides. The returned configuration
-    also records the seed for checkpoint reproducibility.
+    records the seed, but does not guarantee bit-for-bit reproducibility.
+    Neither CLI nor YAML exposes model or dataset revision selection;
+    programmatic callers must supply revisions to the relevant loaders.
 
     Args:
         argv: Sequence of argument strings without the program name, or None

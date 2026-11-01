@@ -17,7 +17,17 @@ DEFAULT_PROMPT_TEMPLATE = (
 
 
 def set_seed(seed, *, deterministic=False):
-    """Seed Python, NumPy and PyTorch for reproducible experiments."""
+    """Seeds Python, NumPy and PyTorch and configures determinism.
+
+    By default, deterministic algorithms are disabled and cuDNN benchmarking
+    is enabled. Seeded runs are therefore not guaranteed to be bit-for-bit
+    reproducible.
+
+    Args:
+        seed: Integer random seed.
+        deterministic: Enables deterministic algorithms and disables cuDNN
+            benchmarking when True. Defaults to False.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -27,7 +37,15 @@ def set_seed(seed, *, deterministic=False):
 
 
 def select_device(preference="auto"):
-    """Select an available CPU, CUDA, or Apple MPS device."""
+    """Selects a device, checking availability only in auto mode.
+
+    Args:
+        preference: "auto" chooses CUDA, then MPS, then CPU. An explicit
+            device name or torch.device is used without an availability check.
+
+    Returns:
+        The selected torch.device.
+    """
     if preference == "auto":
         if torch.cuda.is_available():
             return torch.device("cuda")
@@ -128,7 +146,18 @@ def measure_stage(device, operation, *args):
 
 
 def configure_logger(name="radiology", *, output_dir=None, level=logging.INFO):
-    """Configures console and optional file logging without duplicates."""
+    """Replaces and closes existing handlers on the named logger.
+
+    Adds console logging and optional file logging, and disables propagation.
+
+    Args:
+        name: Logger name, also used for the optional log filename.
+        output_dir: Directory for <name>.log, created if needed; None skips it.
+        level: Logging level; defaults to logging.INFO.
+
+    Returns:
+        The configured logging.Logger.
+    """
     logger = logging.getLogger(name)
     logger.setLevel(level)
     logger.propagate = False
@@ -150,7 +179,15 @@ def configure_logger(name="radiology", *, output_dir=None, level=logging.INFO):
 
 
 def write_json(data, path):
-    """Save experiment configuration, metric history or results as JSON."""
+    """Writes UTF-8 JSON, creating parent directories as needed.
+
+    Args:
+        data: JSON-serialisable configuration, metrics or other data.
+        path: Destination filename (str or PathLike).
+
+    Returns:
+        The destination as a pathlib.Path.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
@@ -159,5 +196,12 @@ def write_json(data, path):
 
 
 def read_json(path):
-    """Load previously saved JSON configuration or metric history."""
+    """Reads UTF-8 JSON configuration, metrics or other data.
+
+    Args:
+        path: Source filename (str or PathLike).
+
+    Returns:
+        The decoded Python object.
+    """
     return json.loads(Path(path).read_text(encoding="utf-8"))
