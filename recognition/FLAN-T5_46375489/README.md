@@ -532,7 +532,7 @@ These counts summarise disagreement, not bounds on the true error rate: assessor
 
 ### 9.2. Qualitative error autopsies
 
-These two cases from the 100-report assessment combine high ChatGPT readability scores with errors flagged by at least two assessors. Each shows the original report, reference and complete epoch-2 predictions. H/O/R records ChatGPT's hallucination flag, critical omission flag and readability score; 1 flags an error, and readability ranges from 1 to 10. Agreement and disagreement with the other assessors are stated below each case. Row indices start at zero.
+These four cases from the 100-report assessment illustrate hallucinations, critical omissions and readability trade-offs. Each shows the original report, reference and complete epoch-2 predictions. H/O/R records ChatGPT's hallucination flag, critical omission flag and readability score; 1 flags an error, and readability ranges from 1 to 10. Agreement and disagreement with the other assessors are stated below each case. Row indices start at zero.
 
 <a id="hallucinations"></a>
 
@@ -551,6 +551,19 @@ These two cases from the 100-report assessment combine high ChatGPT readability 
 
 Both outputs replace normal pulmonary hila with normal lung bases. ChatGPT rated both H=1 despite R=9, because the source does not support this change of location. Claude also flagged hallucinations in both outputs; Gemini did not.
 
+**Row 7573: Fluent wording changes a finding and adds reassurance.**
+
+**Original radiology report:** **Lytic image** in the left clavicle **without radiological criteria for aggressiveness**. A complete CT study is recommended.
+
+**Layman report (reference):** There's a lytic, or broken down, appearance in the left collarbone without any signs of aggressiveness on the x-ray. A full CT scan is recommended for further evaluation.
+
+| Checkpoint | H/O/R (ChatGPT) | Prediction |
+|:---|:--:|:---|
+| LoRA, epoch 2 | 0/0/4 | There is a **lyte image** in the left collarbone, but it doesn't show any signs of aggressiveness. It's suggested to have a full CT scan to check it out. |
+| Full, epoch 2 | 1/1/9 | There is a **swollen area** in the left collarbone that doesn't look like it's **causing any serious problems**. It's suggested to do a full CT scan. |
+
+The full model replaces “lytic image” with “swollen area” and broadens a qualified imaging statement into reassurance about serious problems. All three assessors flagged hallucination in this output. ChatGPT also flagged omission; Gemini and Claude did not. LoRA's unclear term “lyte image” shows a separate readability failure.
+
 <a id="omission-of-important-information"></a>
 
 #### 9.2.2. Omission of important information
@@ -567,6 +580,19 @@ Both outputs replace normal pulmonary hila with normal lung bases. ChatGPT rated
 | Full, epoch 2 | 1/1/8 | The heart is enlarged. The areas where the blood vessels enter the lungs are prominent, likely due to blood vessel issues, and there is a mild pattern of fluid in the lung tissues. This is similar to what was seen in the study from yesterday. |
 
 Both outputs retain the enlarged heart and comparison with yesterday's study, but omit the reported redistribution of blood flow. All three assessors flagged omissions in both outputs. ChatGPT gave both R=8 and also flagged the full model's interpretation of the interstitial pattern as fluid (H=1); Gemini and Claude did not flag that hallucination.
+
+**Row 916: An unchanged finding loses its defining detail.**
+
+**Original radiology report:** Single-chamber pacemaker with sensor. Left pleural effusion is stable compared to the previous control dated 19 06 2012. **Superior mediastinal widening** shows no significant variation compared to the previous study dated 15 06 2012.
+
+**Layman report (reference):** The patient has a single-chamber pacemaker with a sensor. The fluid buildup on the left side of the lungs has not changed much since the last check on June 19, 2012. The area around the heart and lungs also looks the same as it did in the study from June 15, 2012.
+
+| Checkpoint | H/O/R (ChatGPT) | Prediction |
+|:---|:--:|:---|
+| LoRA, epoch 2 | 0/0/7 | A single-chamber pacemaker with a sensor is present. The fluid buildup around the left lung has remained the same since the last check on June 19, 2012. The area around the heart, called the superior mediastinal, is **wider than usual**, and there are no major differences compared to the previous study from June 15, 2012. |
+| Full, epoch 2 | 0/1/9 | A single-chamber pacemaker with a sensor is present. The fluid buildup in the left chest cavity has not changed since the last check on June 19, 2012. The area around the heart and lungs **has not changed significantly** since the last study on June 15, 2012. |
+
+The full model preserves the date and lack of change but omits the widening itself. All three assessors flagged this omission; none flagged either error type in LoRA's output, which retains “wider than usual”. ChatGPT rated the full output more readable (9 versus 7). The reference also omits the widening, illustrating why fidelity checks must use the source report.
 
 <a id="sec-sentence-overlap"></a>
 
