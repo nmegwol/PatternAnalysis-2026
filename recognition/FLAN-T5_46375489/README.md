@@ -96,19 +96,21 @@ Both methods improve ROUGE and meet pilot resource limits under this timing scop
 
 ## 4. Example Inputs and Outputs
 
-Validation row 2 shows a report given to the prototype and the summaries it produces. Both trained models use the weights saved after epoch 2. Section [9.2](#sec-error-autopsies) compares LoRA and full fine-tuning at epoch 2 on four examples of factual errors and missing information despite readable wording.
+Validation row 4333 (zero-based) is a selected illustration from the [100-report assessment sample](analysis/validation_sample_100_seed42.json) (seed 42). The overlap audit found no exact normalised sentence matches for this report in the training reports. Both trained outputs use the weights saved after epoch 2.
 
-**Source:** Chronic pulmonary changes
+**Original radiology report:** Bilateral alveolar involvement, predominantly in the left, with no significant changes compared to the previous study dated 22 03 2011, related to bilateral bronchopneumonia.
 
-**Reference:** Long-term changes in the lungs are seen.
+**Layman report (reference):** Both lungs have some involvement, especially the left one, and it hasn't changed much compared to the previous study from March 22, 2011. This is related to an infection in both lungs called bronchopneumonia.
 
-**Baseline:** This radiology report describes the changes in the lungs caused by chronic pulmonary changes.
+| Checkpoint | Prediction |
+|:---|:---|
+| Baseline | This report summarizes the present findings of a prospective study of bilateral bronchopneumonia. |
+| LoRA, epoch 2 | Both lungs show some involvement, mainly on the left side, and there are no major differences compared to the previous study from March 22, 2011, related to a lung infection called bronchopneumonia. |
+| Full, epoch 2 | Both lungs show signs of involvement, mainly on the left side, and there are no significant changes compared to the previous study from March 22, 2011. This is related to a type of pneumonia called bronchopneumonia affecting both lungs. |
 
-**LoRA, epoch 2:** Long-term changes in the lungs are present.
+Both trained models preserve involvement of both lungs, greater involvement on the left and no significant change compared with 22 March 2011. The baseline retains the diagnosis but invents a “prospective study” and omits the left predominance and dated comparison.
 
-**Full, epoch 2:** Long-term changes in the lungs are present.
-
-Both trained models replace “chronic pulmonary changes” with everyday language about long-term changes in the lungs. The baseline repeats the technical phrase without explaining what it means.
+All three AI assessors flagged no hallucinations or critical omissions in either trained output. Section [9.1](#sec-quality-review) describes the assessment and its limitations; Section [9.2](#sec-error-autopsies) presents failure cases.
 
 <a id="sec-dataset"></a>
 
