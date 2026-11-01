@@ -5,8 +5,6 @@
 Weiming Liang — 46375489  
 COMP3710, Task 2.6
 
-30 October 2026
-
 [Problem](#sec-problem) · [Algorithm](#sec-algorithm) · [Feasibility review](#sec-feasibility) · [Example inputs and outputs](#sec-examples) · [Data](#sec-dataset) · [Installation and usage](#sec-usage) · [Reproducibility](#sec-experiments) · [Results](#sec-results) · [Error analysis](#sec-safety) · [Recommendation](#sec-recommendation) · [AI disclosure](#sec-ai-disclosure) · [References](#sec-references)
 
 <a id="sec-problem"></a>
@@ -649,21 +647,21 @@ For the exact-pair comparison, the complete source report and target summary mus
 
 ### 10.1. Engineering recommendation and required actions
 
-Use full fine-tuning as the main development approach, with full epoch 2 as the current prototype and epoch 1 retained for clinician comparison. Use LoRA only if full fine-tuning exceeds resource limits and a LoRA trial meets them. Section [10.2](#trade-off-synthesis) explains the trade-offs behind this recommendation.
+Use full fine-tuning for further development, with full epoch 2 as the current prototype and epoch 1 retained for clinician comparison. Use LoRA only if full fine-tuning exceeds resource limits and a LoRA trial meets them.
 
-The prototype is not ready for patient use. Full epoch 2 still has 4–9% AI-flagged hallucinations and 5–14% critical omissions across assessors. However, these assessments are AI-based and requires further validation by clinicians before deployment.
+The prototype is not ready for patient use. Full epoch 2 has 4–9% AI-flagged hallucinations and 5–14% critical omissions across assessors. These judgments require clinician validation before deployment.
 
 <a id="next-engineering-steps"></a>
 
 Prioritise the following work:
 
-1.  **Check resources.** Measure peak memory, complete runtime and disk needs on the intended GPU with long inputs and targets. Reduce batch sizes and use gradient accumulation if needed. If trialling LoRA, benchmark inference after merging the adapters into the base model to check whether this closes the measured speed gap.
+1.  **Check resources.** Define training and deployment hardware and resource budgets. Measure peak memory, complete runtime and storage with long inputs and targets; adjust training batch size and gradient accumulation if needed.
 
-2.  **Remove exact overlaps.** Controlled overlap-removal retraining was not completed for the final experiment and remains future work. Exclude training pairs matching validation and record the removals. Restart from pretrained weights and train for two epochs, keeping validation and settings fixed. Compare with a control that removes the same number of training pairs at random.
+2.  **Audit overlap in stages.** First remove training pairs with exact validation matches and record removals. Retrain from pretrained weights for two epochs with fixed validation and settings, comparing against a control that removes the same number of training pairs at random. Then assess near-duplicates and longer shared passages before choosing broader filters.
 
-3.  **Extend training.** After the two-epoch overlap comparison, continue full fine-tuning on the filtered training data for more epochs. Evaluate after each epoch and select the best checkpoint using validation loss and how accurately its summaries reflect the source reports. Set a training budget and an early-stopping rule before starting.
+3.  **Extend training.** After the controlled comparison, continue full fine-tuning for more epochs on the filtered data. Evaluate each epoch and select checkpoints using validation loss and summary fidelity to the source. Set a budget and early-stopping rule beforehand.
 
-4.  **Validate clinical guardrails.** Have clinicians compare checkpoint outputs against the same 100 source reports in random order, with model labels hidden. Use their judgments to validate automated checks for unsupported or missing findings, location, negation and uncertainty. Withhold flagged summaries from patient display and route them to clinician review.
+4.  **Validate clinical checks.** Have clinicians assess outputs against the same 100 source reports, with checkpoint labels hidden and output order randomised. Validate automated checks against their judgments and withhold flagged summaries from patient display.
 
 5.  **Check patient understanding.** Test clinician-reviewed summaries with readers without medical training. Show source and summary together, flag truncated inputs and require clinician approval before patient use.
 
@@ -673,29 +671,30 @@ Prioritise the following work:
 
 <a id="tab-trade-off-synthesis"></a>
 
-**Table 8.** Measured trade-offs and their implications for the recommendation, based on Sections [8](#sec-results) and [9](#sec-safety).
+**Table 7.** Measured trade-offs and their implications, based on Sections [8](#sec-results) and [9](#sec-safety).
 
 | Trade-off | Engineering implication |
 |:---|:---|
-| Full fine-tuning achieves higher ROUGE, including on examples without exact training-pair matches, but uses more training memory. | Prefer it when memory permits; use LoRA as the resource fallback. |
-| LoRA saves training memory and adapter storage but showed similar training time. | Choose it for memory and storage savings. The measured runs show no training-time advantage, and the base model is still required. |
-| Higher ROUGE and readability coexist with factual errors. | Include source fidelity in model selection, validate automated guardrails and require clinician review before patient use. |
-| Full epoch 2 improves ROUGE and hallucination ratings; all three AI assessors flag slightly fewer omissions at full epoch 1. | Retain both checkpoints for clinician comparison. The omission gaps are only 1–3 reports out of 100 and do not establish epoch 1 as the better model. |
+| Full fine-tuning achieves higher ROUGE, including on pairs without exact training matches, but uses more training memory. | Allow for higher peak memory before scaling batch size or input length. |
+| LoRA training checkpoints occupy 14 MB versus 2.97 GB for full fine-tuning; training times are similar. | Useful when storing many checkpoints. Sizes include training state; LoRA still needs the frozen base weights. |
+| Unmerged LoRA generates 280 versus 374 tokens/s for full fine-tuning in the recorded batched workload. | Benchmark merged adapters on the chosen target; merging was not evaluated. |
+| Higher ROUGE and readability coexist with AI-flagged factual errors. | Include source fidelity in selection and require clinician approval before patient use. |
+| Full epoch 2 improves ROUGE and observed hallucination rates; epoch 1 has 1–3 fewer omission flags per 100 reports. | Compare both with clinicians; these small gaps do not establish epoch 1 as superior. |
 
 <a id="sec-ai-disclosure"></a>
 
 ## 11. Artificial Intelligence Usage Disclosure
 
-I used OpenAI Codex, ChatGPT, Gemini, Claude, Claude Code and the Antigravity IDE to support the project. I determined the investigation’s scope, selected the comparisons and directed revisions. I manually reviewed generated code and other content and sought clarification where needed.
+I used AI assistants through OpenAI Codex, ChatGPT, Gemini, Claude, Claude Code and the Antigravity IDE to support the project. I set the scope, selected comparisons and directed revisions. I manually reviewed AI-generated outputs, sought clarification where needed, directed testing appropriate to each component and inspected the results. I also used AI from different providers to cross-check one another’s outputs.
 
 - **Concepts and planning.** AI supported conceptual clarification, literature interpretation and experimental planning, including model selection, evaluation criteria and resource constraints.
 
-- **Implementation and testing.** AI assisted with code development, refactoring and debugging. Assistants checked changes through separate-agent reviews, controlled CPU tests, before-and-after comparisons, checkpoint checks and small GPU test runs.
+- **Implementation and testing.** AI assisted with code development, refactoring and debugging. AI checked changes through separate-agent reviews, controlled CPU tests, before-and-after comparisons, checkpoint checks and small GPU test runs.
 
-- **Experiments and analysis.** Assistants executed the training and evaluation runs, verified metrics and examples against saved results and dataset records, and analysed dataset overlap and model errors. ChatGPT, Gemini and Claude provided clinical-fidelity and readability scores (Section [9.1](#sec-quality-review)); automated checks verified score completeness and the reported summary calculations.
+- **Experiments and analysis.** AI executed the training and evaluation runs, verified metrics and examples against saved results and dataset records, and analysed dataset overlap and model errors. ChatGPT, Gemini and Claude provided clinical-fidelity and readability scores (Section [9.1](#sec-quality-review)); automated checks verified score completeness and the reported summary calculations.
 
 - **Writing and presentation.** AI assisted with report drafting and revision, including figures, tables, plain-language explanations, usage instructions and source attribution. I directed the organisation and presentation and requested corrections supported by project evidence.
-  
+
 <a id="sec-references"></a>
 
 ## 12. References and Attribution
