@@ -15,7 +15,7 @@ COMP3710, Task 2.6
 
 Radiology reports often use technical language that patients find difficult to understand. This prototype adapts FLAN-T5-base to produce plain-language summaries for the general public while preserving the findings, their location, whether they are present or absent, and any uncertainty. Given a radiology report, the model generates a summary that is easier for non-specialists to read while retaining the essential clinical information.
 
-Using BioLaySumm LaymanRRG report–summary pairs, the project compares models trained via LoRA and full fine-tuning with the pretrained model in terms of summary quality and computing costs. The key investigation is whether fine-tuning these models can improve the summary quality both in fluency and factual accuracy. The outputs of the models will be evaluated for readability, factual accuracy, and overlap with reference summaries.
+Using BioLaySumm LaymanRRG report–summary pairs, the project compares LoRA and full fine-tuning against the pretrained baseline on summary quality and computational cost in terms of summary quality and computing costs. The key investigation is whether fine-tuning can improve the summary quality both in readability and factual accuracy. The outputs of the models are evaluated for readability, factual accuracy, and overlap with reference summaries.
 
 <a id="sec-algorithm"></a>
 
