@@ -469,13 +469,13 @@ The average milliseconds per report are amortised over batches of 32 and include
 
 <a id="sec-safety"></a>
 
-## 9. Clinical Fidelity and Readability
+## 9. Clinical Fidelity, Readability and Data Overlap
 
 <a id="sec-quality-review"></a>
 
 ### 9.1. Assessment of the second acceptance criterion
 
-The planned review randomly selected 100 of the 10,000 validation reports using seed 42. Every report had the same chance of selection, and none was selected twice. Three AI assessors reviewed the predictions from all five checkpoints for these reports, giving 500 evaluations per assessor. These were ChatGPT (Pro effort; model version not recorded) ([ChatGPT 2026](#ref-qualityreview)), Gemini 4 Argon ([Gemini 2026](#ref-geminiqualityreview)), and Claude Opus 5.5 (High effort) ([Claude 2026](#ref-claudequalityreview)). Each gave scores and brief reasons for every complete prediction. Their recorded rating criteria are summarised below. The original radiology report is the basis for checking the facts; the reference provides additional guidance on plain wording. If they disagree, the original report takes priority.
+The planned review randomly selected 100 of the 10,000 validation reports using seed 42. Every report had the same chance of selection, and none was selected twice. Three AI assessors reviewed the predictions from all five checkpoints for these reports, giving 500 evaluations per assessor. These were ChatGPT (Pro effort) ([ChatGPT 2026](#ref-qualityreview)), Gemini 4 Argon ([Gemini 2026](#ref-geminiqualityreview)), and Claude Opus 5.5 (High effort) ([Claude 2026](#ref-claudequalityreview)). Each gave scores and brief reasons for every complete prediction. Their recorded rating criteria are summarised below. The original radiology report is the basis for checking the facts; the reference provides additional guidance on plain wording. If they disagree, the original report takes priority.
 
 - **Hallucination (H, 0/1).** Score 0 when the original report supports all factual claims; score 1 when at least one clinical claim is unsupported, made up or contradicts the report. Checks cover diagnoses, procedures, medical history, location, side of the body, measurements, whether a finding is present or absent, and how certain a diagnosis is. Accurate rewording and generic or repetitive wording alone are not hallucinations.
 
@@ -513,36 +513,32 @@ The two error flags are scored separately: both may be 1, but one does not autom
 | Claude Opus 5.5 | Full, epoch 1 | 11% | 4% | $8.30 \pm 1.46$ |
 | Claude Opus 5.5 | Full, epoch 2 | 7% | 5% | $8.58 \pm 1.16$ |
 
-All three assessors give all four fine-tuned checkpoints lower error rates and higher average readability than the baseline. Each AI assessment therefore supports the second acceptance criterion. Full tuning at epoch 2 has the lowest hallucination rate and highest readability for every assessor. Full epoch 1 has the fewest omissions for ChatGPT and Gemini, and ties with LoRA epoch 2 for Claude.
+All three assessors give all four fine-tuned checkpoints lower error rates and higher average readability than the baseline. Each AI assessment therefore supports the second acceptance criterion. Full tuning at epoch 2 has the lowest observed hallucination rate and highest mean readability for every assessor. Full epoch 1 has the fewest observed omissions for ChatGPT and Gemini, and ties with LoRA epoch 2 for Claude.
 
-Omission rates vary by assessor: LoRA epoch 2 ranges from 4% to 25%, and full epoch 2 from 5% to 14%. The ratings are reported separately. Combining them would not provide independent samples because all assessors reviewed the same reports. The AI assessors knew which checkpoint produced each output, and clinicians have not checked their judgments. Reviews by clinicians and readers without medical training are the next step. The cases below use the original ChatGPT ratings.
+**Assessor agreement.** Pairwise Cohen's $\kappa$ (agreement adjusted for chance) ranges from 0.65–0.84 for hallucinations and 0.34–0.53 for omissions. Omission judgments are less consistent: LoRA epoch 2 rates range from 4% to 25%. These agreement statistics cover 400 outputs from the same 100 reports across four fine-tuned checkpoints; they do not establish clinical accuracy.
 
-Although these are advanced models, they remain large language models, and their outputs and scores can contain occasional errors. Their judgments therefore require fact-checking against the original reports through case-by-case review.
+**Sampling uncertainty.** With 100 reports, Wilson 95% intervals are 4.81–16.23% for ChatGPT's hallucination rate of 9% at full epoch 2 and 17.55–34.30% for Gemini's omission rate of 25% at LoRA epoch 2. These intervals describe sampling uncertainty conditional on the assessor's judgments. Exploratory exact McNemar tests found no significant difference between full epochs 1 and 2 in either error flag for any assessor (all unadjusted $p>0.05$); this does not establish equivalence.
+
+**Voting patterns.** For full epoch 2, counts out of the same 100 outputs are:
+
+| Flag | Any assessor | Majority (at least two) | All three |
+|:---|---:|---:|---:|
+| Hallucination | 11 | 6 | 3 |
+| Critical omission | 17 | 6 | 5 |
+
+These counts summarise disagreement, not bounds on the true error rate: assessors may share missed errors or incorrect flags. Their ratings are not independent samples.
+
+**Assessment limitations.** Assessors knew which checkpoint produced each output. ChatGPT's model version was not recorded, limiting reproducibility. AI assessor judgments are unvalidated and require case-by-case checking against the source reports by clinicians; readability also needs checking with readers without medical training.
 
 <a id="sec-error-autopsies"></a>
 
 ### 9.2. Qualitative error autopsies
 
-These four cases from the 100-report assessment illustrate why high readability scores do not guarantee clinical fidelity. They were selected because the epoch 2 outputs score 7–9 for readability yet have flagged hallucinations or critical omissions. Each shows the original radiology report and reference layman report, followed by the complete predictions from LoRA and full fine-tuning at epoch 2. H/O/R shows the recorded hallucination flag, critical omission flag and readability score: 1 flags an error; readability ranges from 1 to 10.
+These two cases from the 100-report assessment combine high ChatGPT readability scores with errors flagged by at least two assessors. Each shows the original report, reference and complete epoch-2 predictions. H/O/R records ChatGPT's hallucination flag, critical omission flag and readability score; 1 flags an error, and readability ranges from 1 to 10. Agreement and disagreement with the other assessors are stated below each case. Row indices start at zero.
 
 <a id="hallucinations"></a>
 
 #### 9.2.1. Hallucinations
-
-Both epoch 2 checkpoints receive R=9 and H=1 in these examples.
-
-**Row 2045: Simplification introduces unsupported clinical claims.**
-
-**Original radiology report:** Inspiratory effort is adequate. **Left basal alveolar infiltrate**, ruling out parenchymal consolidation. Aortic elongation with supra-aortic trunk elongation. Dorsal kyphosis with osteopenia and degenerative changes.
-
-**Layman report (reference):** The breathing effort is good. There’s **a patchy area in the lower left part of the lung**, but it’s not a solid mass. The aorta, the main blood vessel, is stretched out, and the branches above it are also elongated. There’s a humpback posture with weak bones and some wear and tear in the spine.
-
-| Checkpoint | H/O/R | Prediction |
-|:---|:--:|:---|
-| LoRA, epoch 2 | 1/0/9 | The breathing effort is normal. There is a **buildup of fluid** in the left lower part of the lung, which could be a sign of lung tissue becoming solid. The main blood vessel coming out of the heart is stretched out, and the branches above it are stretched out. The upper back is curved, with bone loss and wear and tear. |
-| Full, epoch 2 | 1/0/9 | The breathing effort is good. There is a patch of **lung inflammation** at the bottom left, but it’s not a solid area of lung tissue. The main blood vessel coming out of the heart and the branches above it are stretched out. The upper back is curved, and there is a decrease in bone density and wear and tear changes. |
-
-LoRA describes the lung finding as fluid buildup, while full fine-tuning calls it inflammation. The original report does not establish either interpretation, so both outputs receive H=1. Both are easy to read (R=9), but their clear wording adds unsupported clinical meaning.
 
 **Row 6065: Normal findings are changed during simplification.**
 
@@ -550,18 +546,16 @@ LoRA describes the lung finding as fluid buildup, while full fine-tuning calls i
 
 **Layman report (reference):** No signs of pneumonia are found in the lung tissue. The heart and the area around it, as well as the **lung’s main structures**, are all normal. There are no other important issues observed.
 
-| Checkpoint | H/O/R | Prediction |
+| Checkpoint | H/O/R (ChatGPT) | Prediction |
 |:---|:--:|:---|
 | LoRA, epoch 2 | 1/0/9 | No signs of lung infections are found in the lung tissue. The heart and middle chest area and the **lung bases** are normal. There are no other important issues found. |
 | Full, epoch 2 | 1/0/9 | No signs of pneumonia are found in the lung tissue. The heart and the area around it, as well as the **lung bases**, are all normal. There are no other important issues noted. |
 
-Both outputs replace normal pulmonary hila with normal lung bases. These are different locations, so both receive H=1 despite R=9. The sentences sound natural and reassuring, but the claim about the lung bases is not supported by the original report.
+Both outputs replace normal pulmonary hila with normal lung bases. ChatGPT rated both H=1 despite R=9, because the source does not support this change of location. Claude also flagged hallucinations in both outputs; Gemini did not.
 
 <a id="omission-of-important-information"></a>
 
 #### 9.2.2. Omission of important information
-
-Both epoch 2 outputs have O=1 in each example, with readability scores of 7–8.
 
 **Row 5155: Readable summaries omit redistribution of blood flow.**
 
@@ -569,33 +563,29 @@ Both epoch 2 outputs have O=1 in each example, with readability scores of 7–8.
 
 **Layman report (reference):** The heart is enlarged. The blood vessels near the lungs are prominent, indicating a **redistribution of blood flow** and a mild pattern of fluid in the lungs, which hasn’t changed much compared to the previous day’s examination.
 
-| Checkpoint | H/O/R | Prediction |
+| Checkpoint | H/O/R (ChatGPT) | Prediction |
 |:---|:--:|:---|
 | LoRA, epoch 2 | 0/1/8 | The heart is enlarged. The areas where the blood vessels enter the lungs are prominent, likely due to blood vessel issues. There is a mild pattern in the lung tissue, but it hasn’t changed much since the study done yesterday. |
 | Full, epoch 2 | 1/1/8 | The heart is enlarged. The areas where the blood vessels enter the lungs are prominent, likely due to blood vessel issues, and there is a mild pattern of fluid in the lung tissues. This is similar to what was seen in the study from yesterday. |
 
-Both outputs retain the enlarged heart and the comparison with yesterday’s study, but omit the reported redistribution of blood flow. The vague phrase “blood vessel issues” does not communicate this specific finding. Both receive R=8 and O=1, showing that readable wording can still leave out important information. The full output also interprets the interstitial pattern as fluid in the lung tissues, which the source does not establish (H=1).
-
-**Row 1654: Readable summaries lose the location of a finding.**
-
-**Original radiology report:** No images of consolidation or significant pulmonary infiltrates are identified. The **left pulmonary hilum** is prominent. Comparison with the previous study dated 31 01 2011 shows no significant changes.
-
-**Layman report (reference):** There are no signs of pneumonia or major lung issues on the images. The **area where the left lung connects to the bronchus** is more noticeable. Comparing this to the previous study from January 31, 2011, there are no significant changes.
-
-| Checkpoint | H/O/R | Prediction |
-|:---|:--:|:---|
-| LoRA, epoch 2 | 0/1/7 | No signs of lung infections or major lung infections are found. The left lung area is more noticeable. Comparing this to the previous study from January 31, 2011, there are no significant changes. |
-| Full, epoch 2 | 0/1/7 | No signs of lung infections or serious lung issues are found. The left lung area is more noticeable. Comparing this to the previous study from January 31, 2011, there are no significant changes. |
-
-Both outputs replace the prominent left hilum with a more noticeable “left lung area”. They preserve the left side and the comparison with the earlier study, but lose the specific location. Both receive R=7 and O=1, showing that readable wording can still omit an important detail.
+Both outputs retain the enlarged heart and comparison with yesterday's study, but omit the reported redistribution of blood flow. All three assessors flagged omissions in both outputs. ChatGPT gave both R=8 and also flagged the full model's interpretation of the interstitial pattern as fluid (H=1); Gemini and Claude did not flag that hallucination.
 
 <a id="sec-sentence-overlap"></a>
 
-### 9.3. Repeated report–summary pairs
+### 9.3. Training–validation text overlap
 
-Data leakage can occur when training and validation contain the same examples, slightly reworded copies, or related reports from the same patient or study. This check covers only identical report–summary pairs.
+Data leakage can occur when training and validation contain the same examples, reworded copies, or related reports from the same patient or study. The saved text-overlap checks found:
 
-Both the complete source report and target summary must match the same training row after standardising character forms (Unicode NFKC), capitalisation and spacing. All wording, numbers and punctuation are kept. This finds 2,380 matches among 10,000 validation reports (23.80%). Table [6](#tab-exact-pair-overlap) compares their scores with the remaining 7,620 reports.
+| Matching condition | Validation reports (of 10,000) |
+|:---|---:|
+| Any shared source sentence | 8,940 (89.40%) |
+| Shared source sentence of at least five words | 6,097 (60.97%) |
+| Every distinct source sentence seen in training | 5,608 (56.08%) |
+| Exact report–summary pair | 2,380 (23.80%) |
+
+The categories overlap and must not be added. Sentence matching normalises Unicode (NFKC), case and spacing, and ignores terminal `.?!`; word counts use whitespace. Sentences may match different training reports, without matching references. Common radiology wording can produce sentence overlap without duplicate clinical cases.
+
+For the exact-pair comparison, the complete source report and target summary must match the same training row after standardising character forms (Unicode NFKC), capitalisation and spacing. All wording, numbers and punctuation are kept. Table [6](#tab-exact-pair-overlap) compares the 2,380 matching pairs with the remaining 7,620 reports.
 
 <a id="tab-exact-pair-overlap"></a>
 
@@ -608,6 +598,8 @@ Both the complete source report and target summary must match the same training 
 | LoRA epoch 2 | 0.8271 / 0.6733 | 0.7036 / 0.4579 | 0.8139 / 0.6075 | 0.8142 / 0.6365 |
 | Full epoch 1 | 0.8442 / 0.7166 | 0.7330 / 0.5206 | 0.8346 / 0.6578 | 0.8347 / 0.6826 |
 | Full epoch 2 | 0.8425 / 0.7238 | 0.7165 / 0.5321 | 0.8329 / 0.6656 | 0.8330 / 0.6901 |
+
+**Effect on scores.** Fine-tuned models score higher on exact pairs; the baseline scores lower. For full epoch 2, ROUGE-Lsum is 0.8330 on matches and 0.6901 on the remaining reports, giving an overall mean of 0.7241 (+0.0340 above the remaining reports). Matching reports are also much shorter: 4.7 versus 29.1 source words on average. This comparison cannot separate repetition from report length; controlled retraining (Section [10](#sec-recommendation)) is needed to distinguish their effects. Absence of an exact pair match does not establish an independent clinical case.
 
 **Three matching examples.** Each pair has identical complete reports and reference summaries. Tables show all five checkpoints’ complete predictions. Row numbers start at zero.
 
@@ -648,8 +640,6 @@ Both the complete source report and target summary must match the same training 
     | Full epoch 2 | The person has a curved spine posture. There are no important issues found. |
 
     **Reference variation for this report.** Across training and validation, this exact radiology report occurs in three rows with two distinct layman references. Training row 85,059 and validation row 424 share the reference shown above. Training row 34,971 instead has: “The person has a curved spine posture, also known as scoliosis. There are no significant issues found.” These are all matching locations in the two splits.
-
-**Effect on scores.** Fine-tuned models score higher on repeated pairs; the baseline scores lower. For full epoch 2, ROUGE-Lsum is 0.8330 on matches and 0.6901 on the remaining reports. Including matches raises the overall mean to 0.7241 (+0.0340), so the overall score does not represent performance on new pairs alone. Matching reports are also much shorter: 4.7 versus 29.1 source words on average. This comparison cannot separate repetition from report length; controlled retraining (Section [10](#sec-recommendation)) is needed to distinguish their effects.
 
 <a id="sec-recommendation"></a>
 
