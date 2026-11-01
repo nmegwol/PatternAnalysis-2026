@@ -46,27 +46,29 @@ The [pinned checkpoint configuration](https://huggingface.co/google/flan-t5-base
 
 ## 3. Feasibility Review
 
-This review records the initial pilot and plan; Sections 7–10 report the subsequent custom-loop experiment.
+This records the initial pilot and plan; Sections 7–10 report the final experiment.
 
 **User Need, Scope & Acceptance Criteria**
 
-The prototype rewrites radiology reports in plain language to facilitate communication between clinicians and patients. The engineering dilemma is to make summaries easier to read while preserving their meaning: higher ROUGE scores alone do not establish factual accuracy and readability. I propose the acceptance criteria below.
+The prototype helps clinicians explain radiology reports to patients. The challenge is simpler language without losing or inventing findings. Proposed criteria:
 
 1.  Improve all four validation ROUGE scores over the pretrained baseline.
 
-2.  Reduce hallucination and critical-omission rates and improve readability over baseline, assessed using a fixed rubric on 100 validation examples sampled uniformly without replacement (seed 42).
+2.  Reduce hallucination and critical-omission rates and improve readability over baseline, using a fixed rubric on 100 validation examples sampled uniformly without replacement (seed 42).
 
-3.  Complete each epoch, including validation, within 60 minutes and 32 GB peak reserved GPU memory on an A100.
+3.  Complete each epoch, including validation, within 60 minutes and 32 GB peak reserved GPU memory on an A100 (decimal GB; approximately 29.80 GiB).
 
 **Model Choice & Course Concepts**
 
-The dataset BioLaySumm LaymanRRG contains **170,991 examples**: 150,454 training, 10,000 validation and 10,537 test rows. Training and validation reports have reference summaries; test reports do not. I chose [FLAN-T5-base](https://arxiv.org/abs/2210.11416) (**Hard** difficulty) over non-instruction-tuned T5 because its training on natural-language instructions aligns with the plain-language rewriting task. Its encoder–decoder Transformer uses attention, while adapting pretrained weights applies transfer learning. The comparison uses [LoRA](https://arxiv.org/abs/2106.09685), which trains 884,736 adapter parameters, with full fine-tuning of all 247,577,856 parameters.
+BioLaySumm LaymanRRG provides 150,454 training, 10,000 validation and 10,537 unlabelled test examples. I chose [FLAN-T5-base](https://arxiv.org/abs/2210.11416) (**Hard** difficulty) for instruction-based rewriting, applying encoder–decoder attention and transfer learning. The experiment compares [LoRA](https://arxiv.org/abs/2106.09685) (884,736 trainable parameters) with full fine-tuning (247,577,856).
 
 **Preliminary Feasibility Evidence**
 
-The pilot experiment used Hugging Face’s Seq2SeqTrainer on an A100 GPU. Separate LoRA and full fine-tuning runs each trained for one epoch on all 150,454 training examples. Both models were then evaluated alongside the unadapted baseline on all 10,000 validation examples.
+The pilot trained each method for one epoch on the full training split using Seq2SeqTrainer and an A100 80GB, then evaluated both and the baseline on all 10,000 validation examples.
 
-Pilot ROUGE scores use a 0–100 scale. Time includes validation and checkpoint selection; VRAM is peak reserved memory in decimal GB.
+The final experiment used two custom-loop epochs, an A100 40GB, and different prompts, batches and learning-rate schedules (Sections [7](#sec-experiments)–[8](#sec-results)). Both used greedy decoding, but their scores are not directly comparable.
+
+Pilot ROUGE uses 0–100 and memory uses decimal GB; final results use 0–1 and GiB. Pilot timing includes training, validation loss and local checkpoints, excluding generation/ROUGE, initial loading and Drive export. Final evaluation includes generation/ROUGE (Section [7.2](#scoring-and-measurement)).
 
 | Method      | Val. loss |   R-1 |   R-2 |   R-L | R-Lsum | Time (min) | VRAM (GB) |
 |:------------|----------:|------:|------:|------:|-------:|-----------:|----------:|
@@ -76,19 +78,19 @@ Pilot ROUGE scores use a 0–100 scale. Time includes validation and checkpoint 
 
 <a id="fig-feasibility-pilot"></a>
 
-![Figure 2. Training loss for LoRA and full fine-tuning (left); validation ROUGE for all three methods (right).](figures/comparison_1x2_2026-10-29.png)
+![Training loss for LoRA and full fine-tuning (left); validation ROUGE for all three methods (right).](figures/comparison_1x2_2026-10-29.png)
 
 **Figure 2.** Training loss for LoRA and full fine-tuning (left); validation ROUGE for all three methods (right).
 
-Both fine-tuned models improve all four ROUGE scores and meet the pilot time and memory limits. Full fine-tuning achieves higher ROUGE scores, while LoRA uses less memory. Factual accuracy and readability require separate review.
+Both methods improve ROUGE and meet pilot resource limits under this timing scope. Full fine-tuning scores higher; LoRA uses less memory. Fidelity and readability require separate review.
 
 **Risks, Budget & Fallback**
 
-**Risk:** Report text in 4,506 validation rows (45.06%) also appears in training after ignoring case and whitespace, potentially inflating scores. Following staff guidance, retain the official splits and assess overlap separately.
+**Risk:** Report text in 4,506 validation rows (45.06%) matches training after ignoring case and whitespace, risking inflated scores. I retained official splits following staff guidance. Section [9.3](#sec-sentence-overlap)'s 23.80% instead requires matching report–summary pairs, also applying Unicode NFKC normalisation.
 
-**Budget and next step:** Propose **10 additional A100 GPU-hours** for two epochs per method using the required custom training and evaluation code, plus generation and subset scoring. Test removal of exact report overlaps separately if time permits.
+**Budget and next step:** I proposed **10 additional A100 GPU-hours** for two epochs per method with custom training/evaluation, generation and subset scoring. Controlled overlap-removal retraining remains future work (Section [10.1](#next-engineering-steps)).
 
-**Fallback:** If reliability remains unproven within budget, report baseline, LoRA and full-tuning performance, errors and resource use without claiming readiness for practical use.
+**Fallback:** If reliability remained unproven, report performance, errors and resource use without claiming readiness for patient use.
 
 <a id="sec-examples"></a>
 
@@ -634,7 +636,7 @@ Prioritise the following work:
 
 1.  **Check resources.** Measure peak memory, complete runtime and disk needs on the intended GPU with long inputs and targets. Reduce batch sizes and use gradient accumulation if needed. If trialling LoRA, benchmark inference after merging the adapters into the base model to check whether this closes the measured speed gap.
 
-2.  **Remove exact overlaps.** Exclude training pairs matching validation and record the removals. Restart from pretrained weights and train for two epochs, keeping validation and settings fixed. Compare with a control that removes the same number of training pairs at random.
+2.  **Remove exact overlaps.** Controlled overlap-removal retraining was not completed for the final experiment and remains future work. Exclude training pairs matching validation and record the removals. Restart from pretrained weights and train for two epochs, keeping validation and settings fixed. Compare with a control that removes the same number of training pairs at random.
 
 3.  **Extend training.** After the two-epoch overlap comparison, continue full fine-tuning on the filtered training data for more epochs. Evaluate after each epoch and select the best checkpoint using validation loss and how accurately its summaries reflect the source reports. Set a training budget and an early-stopping rule before starting.
 
