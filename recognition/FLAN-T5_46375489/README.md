@@ -120,17 +120,19 @@ All three AI assessors flagged no hallucinations or critical omissions in either
 
 ### 5.1. Data source and split protocol
 
-The project uses the BioLaySumm 2025 LaymanRRG open-source track for text-to-text radiology report translation ([BioLaySumm 2025](#ref-dataset); [Xiao et al. 2025](#ref-biolaysumm)). It combines reports from PadChest, BIMCV-COVID19 and Open-i. The dataset creators provided the plain-language reference summaries. They translated PadChest and BIMCV-COVID19 reports into English before simplifying them. Training and validation rows contain a `radiology_report`, its `layman_report` reference summary and other information about the example.
+The project uses the BioLaySumm 2025 LaymanRRG open-source track ([BioLaySumm 2025](#ref-dataset); [Xiao et al. 2025](#ref-biolaysumm)). Training comprises 77.66% PadChest, 20.85% BIMCV-COVID19 and 1.49% Open-i. Reports from the first two were translated into English, accounting for 98.51% of training rows; performance on originally English reports needs separate evaluation.
 
-The experiment uses the fixed dataset version `6783ab38f9de28c4372799346f51d3927ae7eb9a`. Following course staff guidance, the original training, validation and test splits are retained so the results can be compared with other work using them. Models are trained on the training split and scored on the validation split. The test split does not provide reference summaries, so it is excluded from training and scored evaluation.
+The references were generated using [Zhao et al. (2025)](#ref-laymanrrg)'s GPT-4o method with semantic checks and self-refinement. The paper reports human checks of 500 sentence pairs, which do not establish comprehensive clinical validation of this dataset's references.
+
+Dataset version `6783ab38f9de28c4372799346f51d3927ae7eb9a` uses the official splits, retained following staff guidance.
 
 | Split | Rows | Role |
 |:---|---:|:---|
-| Training | 150,454 | All pairs used by LoRA and full fine-tuning. |
-| Validation | 10,000 | Common evaluation for the baseline and each saved epoch. |
-| Test | 10,537 | Source-only batches; references are withheld and this split is excluded from training and scored evaluation. |
+| Training | 150,454 | All pairs used to train both methods. |
+| Validation | 10,000 | Evaluate the baseline and each saved checkpoint. |
+| Test | 10,537 | Inputs only; no references, not scored. |
 
-The example below shows the input report and reference summary in training row 2, using zero-based row numbering.
+Example: training row 2 (zero-based).
 
 | Field | Text |
 |:---|:---|
@@ -141,16 +143,21 @@ The example below shows the input report and reference summary in training row 2
 
 ### 5.2. Prompting and tokenisation
 
-The tokenizer comes from the same fixed FLAN-T5-base version as the model. It splits text into tokens: small units such as words or parts of words. Each report is preceded by this instruction:
+The pinned FLAN-T5 tokenizer converts text to tokens. Each input uses this instruction, a newline, then the report:
 
 > `Simplify this radiology report for a layperson:`  
 > `{report}`
 
-The instruction and report together are limited to 512 tokens. The reference summary used to calculate prediction error (cross-entropy loss) is limited to 256 tokens. Text beyond these limits is cut off. No extra text cleaning or standardisation is applied, and no altered copies are created to expand the training data.
+Inputs, including the instruction and special tokens, are capped at 512 tokens; reference targets for loss calculation, including the end-of-sequence token, at 256. Longer texts are truncated. No additional text cleaning or data augmentation is applied, so formatting such as ambiguous dates (`12 02 2015`) is retained.
 
-Within each batch, filler tokens (padding) extend shorter inputs to the length of the longest input. Reference summaries are padded separately to the longest reference in that batch. Reference padding is marked with $-100$, which tells the loss calculation to ignore those positions. Test batches contain input reports but no reference summaries.
+Word counts split on whitespace; truncation counts use the final prompt and pinned tokenizer.
 
-For loss calculation, the model receives the earlier reference tokens to help predict the next one (teacher forcing). When generating a summary, it uses the instruction, report and its own previous output; it is not given the reference summary. An attention mask identifies which input positions contain real text rather than padding. ROUGE compares generated summaries with the complete references, even when the loss calculation uses shortened versions.
+| Split | Mean words (report / reference) | Inputs truncated | Loss targets truncated |
+|:---|---:|---:|---:|
+| Training | 23.28 / 38.56 | 324 (0.22%) | 2,042 (1.36%) |
+| Validation | 23.32 / 38.60 | 11 (0.11%) | 127 (1.27%) |
+
+Each batch pads reports and references separately to their longest sequence. An attention mask identifies input padding; reference padding is set to $-100$ so loss ignores it. ROUGE uses the complete references.
 
 <a id="sec-usage"></a>
 
@@ -738,3 +745,7 @@ Wolf, Thomas, Lysandre Debut, Victor Sanh, et al. 2020. “Transformers: State-o
 <a id="ref-biolaysumm"></a>
 
 Xiao, Chenghao, Kun Zhao, Xiao Wang, et al. 2025. “Overview of the BioLaySumm 2025 Shared Task on Lay Summarization of Biomedical Research Articles and Radiology Reports.” In *Proceedings of the 24th Workshop on Biomedical Language Processing*, 365–77. Association for Computational Linguistics. <https://doi.org/10.18653/v1/2025.bionlp-1.31>.
+
+<a id="ref-laymanrrg"></a>
+
+Zhao, Kun, Chenghao Xiao, Sixing Yan, et al. 2025. “X-ray Made Simple: Lay Radiology Report Generation and Robust Evaluation.” arXiv:2406.17911v6, revised 19 May 2025. <https://arxiv.org/abs/2406.17911v6>.
