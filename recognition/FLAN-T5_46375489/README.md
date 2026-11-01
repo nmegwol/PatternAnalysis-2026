@@ -605,35 +605,44 @@ Both the complete source report and target summary must match the same training 
 
 <a id="sec-recommendation"></a>
 
-## 10. Engineering Recommendation and Limitations
+## 10. Engineering Recommendation and Trade-off Synthesis
 
 <a id="recommendation"></a>
 
-### 10.1. Recommendation
+### 10.1. Engineering recommendation and required actions
 
-Use the full epoch 2 checkpoint as the default prototype for further validation. It has the strongest overall ROUGE scores and the highest ROUGE-Lsum on validation reports without exact training matches (Section [9.3](#sec-sentence-overlap)). Compare it with full epoch 1 in clinician review, since epoch 1 has fewer flagged omissions (7% versus 9% in the original assessment).
+Use full fine-tuning as the main development approach, with full epoch 2 as the current prototype and epoch 1 retained for clinician comparison. Use LoRA only if full fine-tuning exceeds resource limits and a LoRA trial meets them. Section [10.2](#trade-off-synthesis) explains the trade-offs behind this recommendation.
 
-Use LoRA only if full fine-tuning cannot meet resource limits and a LoRA trial can. Its main advantages are lower training memory and smaller saved adapters; training times are similar, and the base model is still required.
+The prototype is not ready for patient use. Full epoch 2 still has 4–9% AI-flagged hallucinations and 5–14% critical omissions across assessors. However, these assessments are AI-based and requires further validation by clinicians before deployment.
 
 <a id="next-engineering-steps"></a>
 
-### 10.2. Next engineering steps
+Prioritise the following work:
 
-1.  **Check resources.** Trial full fine-tuning on the intended GPU with long inputs and targets, measuring peak memory, total runtime and disk needs. Reduce batch sizes and use gradient accumulation if needed; trial LoRA only if full fine-tuning still exceeds limits.
+1.  **Check resources.** Measure peak memory, complete runtime and disk needs on the intended GPU with long inputs and targets. Reduce batch sizes and use gradient accumulation if needed. If trialling LoRA, benchmark inference after merging the adapters into the base model to check whether this closes the measured speed gap.
 
-2.  **Remove exact overlaps.** Exclude training pairs matching validation and record the removals. Retrain for two epochs with validation and settings fixed, and compare with a control that removes the same number of training pairs at random.
+2.  **Remove exact overlaps.** Exclude training pairs matching validation and record the removals. Restart from pretrained weights and train for two epochs, keeping validation and settings fixed. Compare with a control that removes the same number of training pairs at random.
 
-3.  **Check clinical accuracy.** Have clinicians compare epoch 1/2 outputs against the same 100 source reports in random order, with model labels hidden. Add automated checks for unsupported or missing findings, location, negation and uncertainty, and validate these checks against clinician judgments.
+3.  **Extend training.** After the two-epoch overlap comparison, continue full fine-tuning on the filtered training data for more epochs. Evaluate after each epoch and select the best checkpoint using validation loss and how accurately its summaries reflect the source reports. Set a training budget and an early-stopping rule before starting.
 
-4.  **Check patient understanding.** Test clinician-reviewed summaries with readers without medical training. Show source and summary together, flag truncated inputs and require clinician approval before patient use.
+4.  **Validate clinical guardrails.** Have clinicians compare checkpoint outputs against the same 100 source reports in random order, with model labels hidden. Use their judgments to validate automated checks for unsupported or missing findings, location, negation and uncertainty. Withhold flagged summaries from patient display and route them to clinician review.
 
-<a id="limits-and-future-work"></a>
+5.  **Check patient understanding.** Test clinician-reviewed summaries with readers without medical training. Show source and summary together, flag truncated inputs and require clinician approval before patient use.
 
-### 10.3. Limits and future work
+<a id="trade-off-synthesis"></a>
 
-**Further training.** Full fine-tuning’s validation loss fell from 0.5150 to 0.4729, supporting a trial of more epochs after reducing overlap. Two epochs and overlapping data do not rule out overfitting. Monitor validation loss and generated summaries, stop when performance no longer improves, and retain the best checkpoint.
+### 10.2. Trade-off synthesis
 
-**Deeper leakage analysis.** Extend Section [9.3](#sec-sentence-overlap) beyond exact pairs to near-duplicates, paraphrases and related patient/study reports where identifiers are available. Remove confirmed training-side overlaps and linked records, document exclusions, and retrain using the fixed validation set and random-removal control above.
+<a id="tab-trade-off-synthesis"></a>
+
+**Table 8.** Measured trade-offs and their implications for the recommendation, based on Sections [8](#sec-results) and [9](#sec-safety).
+
+| Trade-off | Engineering implication |
+|:---|:---|
+| Full fine-tuning achieves higher ROUGE, including on examples without exact training-pair matches, but uses more training memory. | Prefer it when memory permits; use LoRA as the resource fallback. |
+| LoRA saves training memory and adapter storage but showed similar training time. | Choose it for memory and storage savings. The measured runs show no training-time advantage, and the base model is still required. |
+| Higher ROUGE and readability coexist with factual errors. | Include source fidelity in model selection, validate automated guardrails and require clinician review before patient use. |
+| Full epoch 2 improves ROUGE and hallucination ratings; all three AI assessors flag slightly fewer omissions at full epoch 1. | Retain both checkpoints for clinician comparison. The omission gaps are only 1–3 reports out of 100 and do not establish epoch 1 as the better model. |
 
 <a id="sec-ai-disclosure"></a>
 
