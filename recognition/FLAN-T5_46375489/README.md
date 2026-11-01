@@ -21,13 +21,26 @@ Using BioLaySumm LaymanRRG report–summary pairs, the project compares LoRA and
 
 ## 2. Algorithm / Architecture
 
-As [Figure 1](#fig-model-workflow) shows, FLAN-T5 reads an instruction followed by a radiology report and writes a summary ([Raffel et al. 2020](#ref-t5); [Chung et al. 2024](#ref-flan)). Its encoder uses attention to connect relevant parts of the input, while its decoder writes one token (a word or part of a word) at a time. During training, the model receives the earlier tokens of the reference summary and learns to predict the next token; cross-entropy loss measures prediction error and guides weight updates. Full fine-tuning updates all model weights, whereas LoRA trains small added weight adjustments while keeping the original weights fixed ([Hu et al. 2022](#ref-lora)). To generate a summary, the model uses the instruction, report and its own preceding output, choosing the most likely next token until it reaches an end marker or the length limit.
+As [Figure 1](#fig-model-workflow) shows, FLAN-T5-base reads an instruction followed by a radiology report and generates a summary ([Raffel et al. 2020](#ref-t5); [Chung et al. 2024](#ref-flan)). The encoder uses self-attention to relate parts of the input. The decoder uses causal self-attention over earlier summary tokens and cross-attention to the encoded input. In these experiments, greedy decoding selects the most likely next token and feeds it back to the decoder until an end marker or the length limit is reached.
+
+During training, the decoder receives earlier reference-summary tokens and learns to predict the next token; cross-entropy loss measures prediction error and guides weight updates. Full fine-tuning updates all 247,577,856 base parameters. LoRA keeps these weights frozen and trains 884,736 parameters in pairs of small matrices. Their products form updates of rank at most 8 to the query and value projections in all encoder and decoder attention modules, including cross-attention ([Hu et al. 2022](#ref-lora)).
+
+The [pinned checkpoint configuration](https://huggingface.co/google/flan-t5-base/blob/7bcac572ce56db69c1ea7c8af255c5d7c9672fc2/config.json) is summarised below. Its gated-GELU feed-forward layers and separate output weights follow the [T5 v1.1 architecture](https://huggingface.co/google/t5-v1_1-base).
+
+| Component | FLAN-T5-base configuration |
+|:---|:---|
+| Layers | 12 encoder layers and 12 decoder layers |
+| Hidden size and attention | 768 hidden units; 12 heads, each of size 64 |
+| Feed-forward layers | 2,048 units; gated-GELU activation |
+| Embeddings and output | Shared encoder/decoder input embeddings; separate output weights |
+| Position information | Relative-position biases with 32 buckets |
+| Model vocabulary | 32,128 embedding/output entries, [padded to a multiple of 128](https://github.com/google-research/t5x/blob/main/t5x/examples/t5/t5_1_1/base.gin) |
 
 <a id="fig-model-workflow"></a>
 
-![Workflow from instruction and report through the encoder and decoder to a generated summary, with a separate reference-summary path for training and loss evaluation.](figures/model-workflow.png)
+![Encoder–decoder workflow with self-attention, cross-attention, LoRA query/value targets, a generated-token feedback loop, and separate reference-token paths for training and loss evaluation.](figures/model-workflow.png)
 
-**Figure 1.** The instruction and report guide summary generation. Dashed arrows show how reference summaries are used for training and loss evaluation.
+**Figure 1.** Generated tokens feed back into the decoder during generation. Dashed paths use reference summaries for teacher forcing and loss evaluation. In LoRA mode, q/v labels mark the adapted query and value projections.
 
 <a id="sec-feasibility"></a>
 
