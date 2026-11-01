@@ -179,24 +179,24 @@ The implementation uses explicit PyTorch training and evaluation loops. Hugging 
 
 The recorded experiment used Python **3.13.16**, PyTorch **2.11.0+cu130**, CUDA **13.0** and an **NVIDIA A100-SXM4-40GB**. The exact package pins in [requirements.txt](requirements.txt) are:
 
-| Package           | Version | Purpose                                     |
-|:------------------|:--------|:--------------------------------------------|
-| `torch`           | 2.11.0  | Train and run the models.                   |
-| `numpy`           | 2.1.3   | Work with numerical arrays.                 |
-| `transformers`    | 4.56.2  | Load FLAN-T5 and its tokenizer.             |
-| `peft`            | 0.17.1  | Add and load LoRA adapters.                 |
-| `accelerate`      | 1.10.1  | Support model loading and device placement. |
-| `datasets`        | 4.1.1   | Load the dataset splits.                    |
-| `pyarrow`         | 23.0.1  | Read and store dataset tables.              |
-| `pandas`          | 2.2.3   | Work with tabular results.                  |
-| `tokenizers`      | 0.22.2  | Support fast text tokenisation.             |
-| `sentencepiece`   | 0.2.1   | Support T5 text tokenisation.               |
-| `huggingface-hub` | 0.36.2  | Download models and datasets.               |
-| `safetensors`     | 0.8.0   | Read and save model weights.                |
-| `rouge-score`     | 0.1.2   | Calculate ROUGE scores.                     |
-| `matplotlib`      | 3.10.0  | Draw training and result plots.             |
-| `PyYAML`          | 6.0.3   | Read YAML configuration files.              |
-| `psutil`          | 5.9.5   | Support resource-use monitoring.            |
+| Group | Package | Version |
+|:---|:---|:---|
+| **Model training and inference** | `torch` | 2.11.0 |
+| | `transformers` | 4.56.2 |
+| | `peft` | 0.17.1 |
+| | `accelerate` | 1.10.1 |
+| **Tokenisation and file handling** | `tokenizers` | 0.22.2 |
+| | `sentencepiece` | 0.2.1 |
+| | `huggingface-hub` | 0.36.2 |
+| | `safetensors` | 0.8.0 |
+| **Data loading and analysis** | `datasets` | 4.1.1 |
+| | `pyarrow` | 23.0.1 |
+| | `pandas` | 2.2.3 |
+| | `numpy` | 2.1.3 |
+| **Evaluation and plotting** | `rouge-score` | 0.1.2 |
+| | `matplotlib` | 3.10.0 |
+| **Configuration and monitoring** | `PyYAML` | 6.0.3 |
+| | `psutil` | 5.9.5 |
 
 Run the following from the repository root to enter the implementation directory. All later commands and Python examples use that directory as their working directory.
 
